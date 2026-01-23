@@ -19,6 +19,9 @@ dist/
 .env.development.local
 .env.test.local
 .env.production.local
+# But allow .env.example files
+!.env.example
+!infra/.env.example
 
 # IDE and Editor
 .vscode/
@@ -49,6 +52,57 @@ pids/
 *.pid
 *.seed
 *.pid.lock
+
+# WEAV AI Backend
+backend/db.sqlite3
+backend/media/
+backend/staticfiles/
+backend/logs/
+backend/.env
+
+# Docker volumes (local development)
+infra/.env
+
+# MinIO data (external drive)
+# /Volumes/WEAVAI_2T/minio-data/  # Uncomment if using different path
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
 # Optional npm cache directory
 .npm

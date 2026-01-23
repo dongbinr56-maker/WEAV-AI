@@ -1,0 +1,754 @@
+# WEAV-AI 프로젝트 전체 현황 (2026년 1월 23일 기준)
+# GPT가 이 파일만으로 프로젝트 전체 상황을 완벽하게 파악할 수 있도록 상세하게 정리
+
+## 📋 프로젝트 개요
+- **프로젝트명**: WEAV-AI
+- **설명**: Mac Mini + 외장하드 기반 프로덕션급 AI 생성 서비스
+- **기술스택**: React(TypeScript) + Django(DRF) + PostgreSQL + Redis + Celery + MinIO + Nginx
+- **배포환경**: Docker Compose + Cloudflare Tunnel
+- **현재상태**: ✅ 모든 Docker 서비스 정상 작동 중 (healthy)
+
+## 🏗️ 프로젝트 구조
+
+### 루트 디렉토리 구조
+```
+/Users/sondongbin/Documents/GitHub/WEAV-AI/
+├── backend/                    # Django 백엔드 (Python)
+├── infra/                      # 인프라 설정 (Docker, Nginx)
+├── src/                        # React 프론트엔드 (TypeScript)
+├── Document/                   # 문서 및 가이드
+├── .gitignore
+├── package.json                # 프론트엔드 의존성
+├── tsconfig.json              # TypeScript 설정
+├── vite.config.ts             # Vite 빌드 설정
+└── README.md
+```
+
+## 🎨 프론트엔드 (React + TypeScript + Vite)
+
+### 주요 컴포넌트 구조
+```
+src/
+├── components/
+│   ├── auth/                   # 인증 관련 컴포넌트
+│   │   ├── LoginView.tsx      # 로그인 화면
+│   │   └── ProtectedRoute.tsx # 보호된 라우트
+│   ├── chat/                   # 채팅/생성 관련 컴포넌트
+│   │   ├── ChatInput.tsx      # 채팅 입력
+│   │   ├── ChatMessage.tsx    # 채팅 메시지
+│   │   ├── ChatView.tsx       # 채팅 메인 뷰
+│   │   ├── ModelSelector.tsx  # 모델 선택기
+│   │   ├── VideoCreationStudio.tsx # 비디오 생성 스튜디오
+│   │   ├── VideoOptions.tsx   # 비디오 옵션
+│   │   └── WelcomeScreen.tsx  # 웰컴 화면
+│   ├── gallery/               # 갤러리 컴포넌트
+│   │   └── MediaGalleryModal.tsx # 미디어 갤러리 모달
+│   ├── layout/                # 레이아웃 컴포넌트
+│   │   ├── AppHeader.tsx      # 앱 헤더
+│   │   └── Sidebar.tsx        # 사이드바
+│   ├── settings/              # 설정 컴포넌트
+│   │   └── SettingsModal.tsx  # 설정 모달
+│   ├── onboarding/            # 온보딩 컴포넌트
+│   │   └── OnboardingModal.tsx # 온보딩 모달
+│   └── ui/                    # UI 컴포넌트
+│       └── ErrorBoundary.tsx  # 에러 바운더리
+├── constants/                 # 상수 정의
+│   ├── models.ts             # AI 모델 상수
+│   ├── personas.ts           # 페르소나 상수
+│   ├── prompts.ts            # 프롬프트 상수
+│   └── videoModels.ts        # 비디오 모델 상수
+├── contexts/                 # React Context
+│   ├── AuthContext.tsx       # 인증 컨텍스트
+│   ├── ChatContext.tsx       # 채팅 컨텍스트
+│   ├── FolderContext.tsx     # 폴더 컨텍스트
+│   └── ThemeContext.tsx      # 테마 컨텍스트
+├── hooks/                    # 커스텀 훅
+│   ├── useAppLogic.ts        # 앱 로직 훅
+│   └── useChat.ts            # 채팅 훅
+├── services/                 # 서비스 레이어
+│   ├── aiService.ts          # AI 서비스
+│   ├── firebase.ts           # Firebase 서비스
+│   └── userService.ts        # 사용자 서비스
+├── types.ts                  # TypeScript 타입 정의
+└── assets/                   # 정적 자산
+    └── sora-logo.png         # Sora 로고
+```
+
+### 프론트엔드 의존성 (package.json)
+```json
+{
+  "name": "weav-ai",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.16",
+    "axios": "^1.6.2",
+    "eslint": "^8.55.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.5",
+    "firebase": "^10.7.1",
+    "postcss": "^8.4.32",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.20.1",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.2.2",
+    "vite": "^5.0.8"
+  }
+}
+```
+
+### 주요 프론트엔드 기능
+- **인증 시스템**: Firebase Auth 기반 로그인/회원가입
+- **채팅 인터페이스**: 실시간 AI 채팅 및 생성
+- **비디오 생성 스튜디오**: Sora/OpenAI 기반 비디오 생성
+- **갤러리 시스템**: 생성된 미디어 관리
+- **설정 관리**: 사용자 설정 및 환경설정
+- **반응형 디자인**: Tailwind CSS 기반 모던 UI
+
+## 🔧 백엔드 (Django + DRF)
+
+### 백엔드 디렉토리 구조
+```
+backend/
+├── weavai/                    # 메인 Django 프로젝트
+│   ├── __init__.py
+│   ├── settings.py            # Django 설정 (환경변수 기반)
+│   ├── urls.py                # 메인 URL 설정
+│   ├── wsgi.py                # WSGI 설정 (Python 경로 수정됨)
+│   ├── asgi.py                # ASGI 설정
+│   ├── config_celery.py       # Celery 설정 (원래 celery.py였으나 이름 변경)
+│   └── apps/                  # Django 앱들
+│       ├── core/              # 코어 앱 (헬스체크)
+│       │   ├── __init__.py
+│       │   ├── urls.py        # /api/v1/health/
+│       │   └── views.py       # HealthCheckView
+│       ├── jobs/              # AI 작업 관리 앱
+│       │   ├── __init__.py
+│       │   ├── models.py      # Job, Artifact 모델
+│       │   ├── serializers.py # Job 시리얼라이저들
+│       │   ├── views.py       # JobViewSet (CRUD API)
+│       │   ├── urls.py        # URL 라우팅
+│       │   ├── tasks.py       # Celery 태스크들
+│       │   └── fal_queue.py   # FAL.ai Queue 클라이언트
+│       └── storage/           # 스토리지 앱 (MinIO/S3)
+│           ├── __init__.py
+│           ├── s3.py          # S3Storage 클래스
+│           └── urls.py        # 스토리지 URL (현재 빈 상태)
+├── Dockerfile                 # 백엔드 Docker 이미지
+├── entrypoint.sh             # 컨테이너 시작 스크립트
+├── requirements.txt          # Python 의존성
+├── manage.py                 # Django 관리 명령어
+└── setup.sh                  # 초기 설정 스크립트
+```
+
+### Django 설정 (settings.py 주요 내용)
+```python
+# 환경변수 기반 설정
+DEBUG = config('DEBUG', default=False, cast=bool)
+SECRET_KEY = config('SECRET_KEY')
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,testserver', cast=lambda v: [s.strip() for s in v.split(',')])
+
+# 데이터베이스 (PostgreSQL)
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': config('POSTGRES_DB', default='weavai'),
+        'USER': config('POSTGRES_USER', default='weavai_user'),
+        'PASSWORD': config('POSTGRES_PASSWORD'),
+        'HOST': config('POSTGRES_HOST', default='postgres'),
+        'PORT': config('POSTGRES_PORT', default='5432'),
+    }
+}
+
+# Redis 설정
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': config('REDIS_URL', default='redis://redis:6379/1'),
+    }
+}
+
+# Celery 설정
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://redis:6379/0')
+CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default='redis://redis:6379/0')
+
+# MinIO/S3 설정
+AWS_ACCESS_KEY_ID = config('MINIO_ACCESS_KEY')
+AWS_SECRET_ACCESS_KEY = config('MINIO_SECRET_KEY')
+AWS_S3_ENDPOINT_URL = config('MINIO_ENDPOINT_URL', default='http://minio:9000')
+AWS_S3_CUSTOM_DOMAIN = config('MINIO_ENDPOINT_URL', default='http://minio:9000')
+AWS_DEFAULT_ACL = 'public-read'
+AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+AWS_LOCATION = config('MINIO_BUCKET', default='weavai-bucket')
+AWS_STORAGE_BUCKET_NAME = config('MINIO_BUCKET', default='weavai-bucket')
+
+# FAL.ai 설정
+FAL_KEY = config('FAL_KEY')
+```
+
+### 데이터베이스 모델들
+
+#### Job 모델 (jobs/models.py)
+```python
+class Job(models.Model):
+    STATUS_CHOICES = [
+        ('PENDING', '대기중'),
+        ('SUBMITTED', '제출됨'),
+        ('IN_PROGRESS', '진행중'),
+        ('COMPLETED', '완료됨'),
+        ('FAILED', '실패함'),
+        ('CANCELLED', '취소됨'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    provider = models.CharField(max_length=50, choices=[('fal', 'FAL.ai')])
+    model_id = models.CharField(max_length=100)
+    arguments = models.JSONField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
+    store_result = models.BooleanField(default=True)
+    error = models.TextField(blank=True, null=True)
+
+    # FAL.ai 관련 필드들
+    fal_request_id = models.CharField(max_length=100, blank=True, null=True)
+    fal_queue_url = models.URLField(blank=True, null=True)
+    fal_status_url = models.URLField(blank=True, null=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.provider} - {self.model_id} ({self.status})"
+```
+
+#### Artifact 모델 (jobs/models.py)
+```python
+class Artifact(models.Model):
+    KIND_CHOICES = [
+        ('image', '이미지'),
+        ('video', '비디오'),
+        ('audio', '오디오'),
+        ('text', '텍스트'),
+    ]
+
+    job = models.ForeignKey(Job, related_name='artifacts', on_delete=models.CASCADE)
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES)
+    s3_key = models.CharField(max_length=500)
+    presigned_url = models.URLField()
+    mime_type = models.CharField(max_length=100)
+    size_bytes = models.PositiveIntegerField()
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.job.id} - {self.kind}"
+```
+
+### API 엔드포인트들
+
+#### 코어 API (core/urls.py)
+- `GET /api/v1/health/` - 헬스체크 (DB, Redis, Django 상태 확인)
+
+#### 잡 API (jobs/urls.py)
+- `POST /api/v1/jobs/` - 새 AI 작업 생성
+- `GET /api/v1/jobs/` - 작업 목록 조회 (필터링 지원: ?status=COMPLETED&provider=fal)
+- `GET /api/v1/jobs/{id}/` - 작업 상세 조회 (결과물 포함)
+
+### Celery 태스크들 (jobs/tasks.py)
+
+#### submit_fal_job
+- FAL.ai Queue API를 통해 작업 제출
+- Job 상태를 SUBMITTED로 변경
+- FAL.ai request_id, queue_url, status_url 저장
+
+#### poll_fal_job
+- FAL.ai 작업 상태 주기적 확인
+- 완료 시 finalize_job 호출
+
+#### finalize_job
+- FAL.ai에서 결과물 다운로드
+- MinIO에 업로드
+- Artifact 레코드 생성
+- Job 상태를 COMPLETED로 변경
+
+### FAL.ai Queue 클라이언트 (jobs/fal_queue.py)
+```python
+class FalQueueClient:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.base_url = "https://queue.fal.run"
+        self.headers = {
+            "Authorization": f"Key {api_key}",
+            "Content-Type": "application/json"
+        }
+
+    def submit_job(self, model_id: str, arguments: dict) -> dict:
+        """작업 제출"""
+        url = f"{self.base_url}/{model_id}"
+        data = {"input": arguments}
+        response = requests.post(url, json=data, headers=self.headers)
+        return response.json()
+
+    def get_job_status(self, request_id: str) -> dict:
+        """작업 상태 조회"""
+        url = f"{self.base_url}/requests/{request_id}/status"
+        response = requests.get(url, headers=self.headers)
+        return response.json()
+
+    def get_job_result(self, request_id: str) -> dict:
+        """작업 결과 조회"""
+        url = f"{self.base_url}/requests/{request_id}"
+        response = requests.get(url, headers=self.headers)
+        return response.json()
+
+    def download_file(self, file_url: str) -> bytes:
+        """결과물 파일 다운로드"""
+        headers = {"Authorization": f"Key {self.api_key}"}
+        response = requests.get(file_url, headers=headers)
+        return response.content
+```
+
+### S3/MinIO 스토리지 클래스 (storage/s3.py)
+```python
+class S3Storage:
+    def __init__(self):
+        self.s3_client = boto3.client(
+            's3',
+            endpoint_url=os.getenv('MINIO_ENDPOINT_URL', 'http://minio:9000'),
+            aws_access_key_id=os.getenv('MINIO_ACCESS_KEY'),
+            aws_secret_access_key=os.getenv('MINIO_SECRET_KEY'),
+            region_name='us-east-1',
+            use_ssl=False
+        )
+        self.bucket_name = os.getenv('MINIO_BUCKET', 'weavai-bucket')
+
+    def create_bucket_if_not_exists(self):
+        """버킷 생성 (존재하지 않을 경우)"""
+        try:
+            self.s3_client.head_bucket(Bucket=self.bucket_name)
+        except:
+            self.s3_client.create_bucket(Bucket=self.bucket_name)
+            # 퍼블릭 읽기 정책 설정
+            policy = {
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Principal": {"AWS": "*"},
+                        "Action": "s3:GetObject",
+                        "Resource": f"arn:aws:s3:::{self.bucket_name}/*"
+                    }
+                ]
+            }
+            self.s3_client.put_bucket_policy(
+                Bucket=self.bucket_name,
+                Policy=json.dumps(policy)
+            )
+
+    def upload_file(self, file_obj, key: str, content_type: str = None) -> str:
+        """파일 업로드"""
+        extra_args = {}
+        if content_type:
+            extra_args['ContentType'] = content_type
+
+        self.s3_client.upload_fileobj(
+            file_obj, self.bucket_name, key, ExtraArgs=extra_args
+        )
+        return key
+
+    def generate_presigned_url(self, key: str, expiration: int = 3600) -> str:
+        """프리사인드 URL 생성"""
+        return self.s3_client.generate_presigned_url(
+            'get_object',
+            Params={'Bucket': self.bucket_name, 'Key': key},
+            ExpiresIn=expiration
+        )
+```
+
+## 🐳 인프라 (Docker Compose)
+
+### Docker Compose 구성 (infra/docker-compose.yml)
+```yaml
+version: '3.8'
+
+networks:
+  weavai_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
+    driver_opts:
+      o: bind
+      type: none
+      device: ${MINIO_DATA_DIR:-/tmp/minio-data}
+
+services:
+  # PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-weavai}
+      POSTGRES_USER: ${POSTGRES_USER:-weavai_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_this_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-weavai_user} -d ${POSTGRES_DB:-weavai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-weavai_admin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-change_this_long_random_password}
+      MINIO_BROWSER: on
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"  # API 포트
+      - "127.0.0.1:9001:9001"  # 콘솔 포트
+    command: server /data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Django API
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    environment:
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: ${DEBUG:-False}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,testserver}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      MINIO_ENDPOINT_URL: http://minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET:-weavai-bucket}
+      FAL_KEY: ${FAL_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Celery Worker
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    environment: # api와 동일한 환경변수들
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: celery -A weavai worker -l INFO --concurrency=2
+
+  # Nginx
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx/conf.d/weavai.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+```
+
+### Nginx 설정 (infra/nginx/conf.d/weavai.conf)
+```nginx
+upstream api_backend {
+    server api:8000;
+}
+
+server {
+    listen 80;
+    server_name localhost;
+    client_max_body_size 100m;
+
+    # 기본 보안 헤더
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # 헬스체크
+    location /healthz {
+        access_log off;
+        return 200 "ok\n";
+        add_header Content-Type text/plain;
+    }
+
+    # API 라우팅
+    location /api/ {
+        proxy_pass http://api_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        proxy_buffering on;
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+    }
+
+    # 기본 리다이렉트
+    location / {
+        return 404 "Not Found\n";
+    }
+}
+```
+
+### 환경변수 설정 (.env)
+```bash
+# Django 설정
+SECRET_KEY=your-super-secret-key-here-at-least-50-characters-long
+DEBUG=False
+ALLOWED_HOSTS=localhost,testserver,weavai.ai,api.weavai.ai
+
+# 데이터베이스
+POSTGRES_DB=weavai
+POSTGRES_USER=weavai_user
+POSTGRES_PASSWORD=change_this_password
+
+# MinIO 스토리지
+MINIO_DATA_DIR=/Volumes/WEAVAI_2T/minio-data
+MINIO_ACCESS_KEY=weavai_admin
+MINIO_SECRET_KEY=your-very-long-random-secret-key-at-least-32-characters
+MINIO_BUCKET=weavai-bucket
+MINIO_ENDPOINT_URL=http://minio:9000
+
+# FAL.ai API
+FAL_KEY=your-fal-ai-api-key-here
+
+# 기타
+LOG_LEVEL=INFO
+MAX_UPLOAD_SIZE_MB=100
+PRESIGNED_URL_EXPIRATION=3600
+```
+
+## 🔄 현재 작동 상태 (2026-01-23 기준)
+
+### Docker 서비스 상태 (모두 healthy)
+```
+weavai_api        - Up (healthy) - Django Gunicorn 서버
+weavai_worker     - Up (healthy) - Celery 작업자
+weavai_nginx      - Up (healthy) - 리버스 프록시
+weavai_postgres   - Up (healthy) - PostgreSQL DB
+weavai_redis      - Up (healthy) - Redis 캐시/브로커
+weavai_minio      - Up (healthy) - MinIO 객체 스토리지
+```
+
+### 테스트된 API 엔드포인트
+```bash
+# 1. Nginx 헬스체크
+curl http://localhost:8080/healthz
+# 응답: ok
+
+# 2. Django API 헬스체크
+curl http://localhost:8080/api/v1/health/
+# 응답: {
+#     "status": "healthy",
+#     "timestamp": "2026-01-23T05:30:24.008053+00:00",
+#     "version": "1.0.0",
+#     "services": {
+#         "database": "healthy",
+#         "redis": "healthy",
+#         "django": "healthy",
+#         "celery": "unknown"
+#     }
+# }
+
+# 3. 작업 생성 (FAL_KEY 필요)
+curl -X POST http://localhost:8080/api/v1/jobs/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "fal",
+    "model_id": "fal-ai/fast-sdxl",
+    "arguments": {"prompt": "beautiful sunset over mountains"},
+    "store_result": true
+  }'
+
+# 4. 작업 목록 조회
+curl http://localhost:8080/api/v1/jobs/
+
+# 5. 작업 상세 조회
+curl http://localhost:8080/api/v1/jobs/{job_id}/
+```
+
+## 📋 다음 단계 작업 목록
+
+### 1. MinIO 버킷 초기화
+```bash
+cd infra
+./scripts/init_minio_bucket.sh
+```
+- 버킷 생성 및 퍼블릭 읽기 정책 설정 필요
+
+### 2. FAL.ai API 키 설정 확인
+- `.env` 파일에 `FAL_KEY` 설정 필요
+- https://fal.ai 에서 API 키 발급
+
+### 3. API 기능 테스트
+- 실제 AI 작업 생성 및 처리 테스트
+- Celery 워커 로그 모니터링
+- 결과물 MinIO 업로드 확인
+
+### 4. Cloudflare Tunnel 설정 (외부 접근용)
+```bash
+# Cloudflared 설치 및 설정
+brew install cloudflared
+cloudflared tunnel login
+cloudflared tunnel create weavai
+cloudflared tunnel route dns weavai weavai.ai
+cloudflared tunnel run weavai
+```
+
+### 5. 프론트엔드 연동
+- API 엔드포인트들과 연결
+- 실시간 작업 상태 업데이트
+- 생성된 미디어 표시
+
+### 6. 모니터링 및 로깅
+- Celery 작업 모니터링
+- 에러 처리 및 재시도 로직
+- 성능 모니터링
+
+## 🔍 주요 기술적 특징
+
+### 1. 환경변수 기반 설정
+- 모든 설정이 환경변수로 관리
+- 개발/프로덕션 환경 구분
+- 보안 정보 하드코딩 방지
+
+### 2. 마이크로서비스 아키텍처
+- API 서버, 워커, 스토리지 완전 분리
+- 헬스체크를 통한 서비스 의존성 관리
+- 독립적인 스케일링 가능
+
+### 3. 비동기 작업 처리
+- Celery를 통한 백그라운드 작업
+- FAL.ai Queue API 연동
+- Redis를 브로커로 사용
+
+### 4. 객체 스토리지 통합
+- MinIO를 S3 호환 스토리지로 사용
+- 외장하드에 데이터 저장
+- 프리사인드 URL로 안전한 접근
+
+### 5. 보안 고려사항
+- API 키 암호화 저장
+- 프록시 헤더 설정
+- CORS 및 보안 헤더 설정
+
+## 🚨 해결된 주요 이슈들
+
+### 1. Python 경로 문제
+- `manage.py`, `wsgi.py`에서 `sys.path` 수동 설정
+- Django 앱 임포트 문제 해결
+
+### 2. PostgreSQL 연결 문제
+- 환경변수 이름 통일 (`POSTGRES_*`)
+- `psycopg2-binary` 패키지 추가
+
+### 3. Nginx 설정 충돌
+- 기본 설정 파일 덮어쓰기로 해결
+- `/healthz` 엔드포인트 정상 작동
+
+### 4. Docker 헬스체크
+- 모든 서비스에 헬스체크 추가
+- 의존성 기반 시작 순서 제어
+
+## 📚 참고 문서들
+
+### 프로젝트 문서
+- `README.md` - 프로젝트 개요
+- `infra/README.md` - 인프라 설정 가이드
+- `backend/README.md` - 백엔드 개발 가이드
+- `SecretValue_Setting.md` - 보안 설정 가이드
+
+### 외부 문서
+- `Document/Codex Prompting Guide.pdf`
+- `Document/GPT-5.2 Prompting Guide.pdf`
+- `Document/Video generation with Sora _ OpenAI API.pdf`
+
+---
+
+## 🎯 현재 프로젝트 상태 요약
+
+✅ **완료된 작업들:**
+- 프론트엔드 기본 구조 및 컴포넌트 구현
+- Django 백엔드 API 서버 구축
+- PostgreSQL + Redis + MinIO 인프라 구성
+- Docker Compose를 통한 컨테이너화
+- FAL.ai Queue API 연동
+- Celery 비동기 작업 처리
+- Nginx 리버스 프록시 설정
+- 모든 서비스 헬스체크 및 모니터링
+
+🔄 **진행 중인 작업들:**
+- MinIO 버킷 초기화
+- FAL.ai API 키 설정
+- API 기능 종합 테스트
+
+⏳ **다음 단계 작업들:**
+- Cloudflare Tunnel을 통한 외부 접근 설정
+- 프론트엔드와 백엔드 완전 연동
+- 프로덕션 배포 및 모니터링
+- 사용자 인증 및 권한 관리 완성
+
+이 파일을 통해 GPT는 프로젝트의 전체적인 구조, 현재 상태, 그리고 다음 단계들을 완벽하게 파악할 수 있습니다.

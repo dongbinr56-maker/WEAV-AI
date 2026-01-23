@@ -1,0 +1,142 @@
+version: '3.8'
+
+services:
+  # Django Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./weav_ai:/app
+      - ./staticfiles:/app/staticfiles
+      - ./media:/app/media
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=your-secret-key-change-this
+      - DB_NAME=weav_ai
+      - DB_USER=weav_user
+      - DB_PASSWORD=password
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
+      - AWS_ACCESS_KEY_ID=minio
+      - AWS_SECRET_ACCESS_KEY=minio123
+      - AWS_STORAGE_BUCKET_NAME=weav-ai-files
+      - AWS_S3_ENDPOINT_URL=http://minio:9000
+    depends_on:
+      - db
+      - redis
+      - minio
+    networks:
+      - weav_network
+
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=weav_ai
+      - POSTGRES_USER=weav_user
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - weav_network
+
+  # Redis Cache & Message Broker
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - weav_network
+
+  # Celery Worker
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: celery -A weav_ai worker --loglevel=info
+    volumes:
+      - ./weav_ai:/app
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=your-secret-key-change-this
+      - DB_NAME=weav_ai
+      - DB_USER=weav_user
+      - DB_PASSWORD=password
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    networks:
+      - weav_network
+
+  # Celery Beat (Scheduled Tasks)
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: celery -A weav_ai beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    volumes:
+      - ./weav_ai:/app
+    environment:
+      - DEBUG=True
+      - SECRET_KEY=your-secret-key-change-this
+      - DB_NAME=weav_ai
+      - DB_USER=weav_user
+      - DB_PASSWORD=password
+      - DB_HOST=db
+      - DB_PORT=5432
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - db
+      - redis
+    networks:
+      - weav_network
+
+  # MinIO Object Storage
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minio
+      - MINIO_ROOT_PASSWORD=minio123
+    volumes:
+      - minio_data:/data
+    networks:
+      - weav_network
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./staticfiles:/var/www/static:ro
+    depends_on:
+      - backend
+    networks:
+      - weav_network
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+
+networks:
+  weav_network:
+    driver: bridge
