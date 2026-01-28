@@ -45,6 +45,7 @@ const SidebarComponent: React.FC<SidebarProps> = ({
 
     const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
     const [isGalleryOpen, setIsGalleryOpen] = useState(false);
+    const [isRecentActivityExpanded, setIsRecentActivityExpanded] = useState(true);
 
     const toggleFolder = useCallback((folderId: string) => {
         setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
@@ -271,45 +272,68 @@ const SidebarComponent: React.FC<SidebarProps> = ({
                             )}
 
                             <div>
-                        <h3 className="px-3 text-[11px] font-bold text-gray-500 dark:text-neutral-500 mb-2 uppercase tracking-wider whitespace-nowrap">
-                            최근 활동
-                        </h3>
-                                <div className="space-y-1">
-                                    {recentChats.length === 0 ? (
-                                        <p className="px-3 text-xs text-neutral-600 py-2">최근 활동이 없습니다.</p>
-                                    ) : (
-                                        recentChats.map((chat) => (
-                                            <div
-                                                key={chat.id}
-                                                onClick={() => {
-                                                    navigate(`/chat/${chat.id}`);
-                                                    if (window.innerWidth < 768) onToggle();
-                                                }}
-                                                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-neutral-800/50 text-left group transition-colors cursor-pointer
-                                            ${currentSessionId === chat.id ? 'bg-neutral-800/80' : ''}
-                                        `}
-                                            >
-                                                <div className="flex items-center space-x-3 overflow-hidden">
-                                                    <MessageSquare size={16} className="text-neutral-500 group-hover:text-white transition-colors flex-shrink-0" />
-                                                    <span className="text-sm text-neutral-400 group-hover:text-white truncate">
-                                                        {chat.title}
-                                                    </span>
-                                                </div>
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        if (window.confirm(`'${chat.title}' 채팅방을 삭제하시겠습니까?`)) {
-                                                            deleteChat(chat.id);
-                                                        }
+                                <button
+                                    onClick={() => setIsRecentActivityExpanded(!isRecentActivityExpanded)}
+                                    className="w-full px-3 py-2 flex items-center justify-between text-[11px] font-bold text-gray-500 dark:text-neutral-500 uppercase tracking-wider hover:bg-neutral-800/30 rounded-lg transition-colors"
+                                >
+                                    <span className="whitespace-nowrap">최근 활동</span>
+                                    <div className="transition-transform duration-200 ease-in-out">
+                                        {isRecentActivityExpanded ? (
+                                            <ChevronDown size={14} className="text-neutral-500 flex-shrink-0" />
+                                        ) : (
+                                            <ChevronRight size={14} className="text-neutral-500 flex-shrink-0" />
+                                        )}
+                                    </div>
+                                </button>
+                                <div
+                                    className={`overflow-hidden transition-all duration-300 ease-in-out ${
+                                        isRecentActivityExpanded 
+                                            ? 'max-h-[1000px] opacity-100' 
+                                            : 'max-h-0 opacity-0'
+                                    }`}
+                                >
+                                    <div className="space-y-1 mt-1">
+                                        {recentChats.length === 0 ? (
+                                            <p className="px-3 text-xs text-neutral-600 py-2">최근 활동이 없습니다.</p>
+                                        ) : (
+                                            recentChats.map((chat, index) => (
+                                                <div
+                                                    key={chat.id}
+                                                    onClick={() => {
+                                                        navigate(`/chat/${chat.id}`);
+                                                        if (window.innerWidth < 768) onToggle();
                                                     }}
-                                                    className="opacity-0 group-hover:opacity-100 p-1.5 hover:text-red-400 hover:bg-neutral-700/50 rounded-md transition-all"
-                                                    title="채팅 삭제"
+                                                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-neutral-800/50 text-left group transition-all cursor-pointer
+                                                ${currentSessionId === chat.id ? 'bg-neutral-800/80' : ''}
+                                            `}
+                                                    style={{ 
+                                                        animation: isRecentActivityExpanded 
+                                                            ? `slideDown 0.3s ease-out ${index * 50}ms both` 
+                                                            : 'none'
+                                                    }}
                                                 >
-                                                    <Trash2 size={14} />
-                                                </button>
-                                            </div>
-                                        ))
-                                    )}
+                                                    <div className="flex items-center space-x-3 overflow-hidden">
+                                                        <MessageSquare size={16} className="text-neutral-500 group-hover:text-white transition-colors flex-shrink-0" />
+                                                        <span className="text-sm text-neutral-400 group-hover:text-white truncate">
+                                                            {chat.title}
+                                                        </span>
+                                                    </div>
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (window.confirm(`'${chat.title}' 채팅방을 삭제하시겠습니까?`)) {
+                                                                deleteChat(chat.id);
+                                                            }
+                                                        }}
+                                                        className="opacity-0 group-hover:opacity-100 p-1.5 hover:text-red-400 hover:bg-neutral-700/50 rounded-md transition-all"
+                                                        title="채팅 삭제"
+                                                    >
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 
