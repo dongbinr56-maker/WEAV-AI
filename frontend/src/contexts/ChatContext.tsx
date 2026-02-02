@@ -3,7 +3,7 @@ import { chatApi } from '@/services/api/chatApi';
 import { useApp } from './AppContext';
 import { getDefaultImageOptions, type ImageGenOptions } from '@/constants/models';
 
-const POLL_INTERVAL = 1500;
+const POLL_INTERVAL = 800;
 const POLL_MAX = 60;
 const DEFAULT_CHAT_MODEL = 'google/gemini-2.5-flash';
 const DEFAULT_IMAGE_MODEL = 'fal-ai/imagen4/preview';

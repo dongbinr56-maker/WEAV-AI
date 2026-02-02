@@ -13,9 +13,11 @@ export function ChatView() {
   const endRef = useRef<HTMLDivElement>(null);
   const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
 
+  const messageCount = currentSession?.messages?.length ?? 0;
+  const imageRecordCount = currentSession?.image_records?.length ?? 0;
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [currentSession?.messages, currentSession?.image_records]);
+  }, [messageCount, imageRecordCount]);
 
   if (!currentSession) {
     return (
@@ -76,26 +78,7 @@ export function ChatView() {
               </div>
             ) : (
               <div className="space-y-6">
-                {pendingImageRequest?.sessionId === currentSession.id && (
-                  <div className="animate-fade-in-up">
-                    {/* 질문 먼저: 유저 풍선 (오른쪽) */}
-                    <div className="flex justify-end mb-2">
-                      <div className="max-w-[85%]">
-                        <div className="rounded-lg px-4 py-2 bg-primary text-primary-foreground transition-colors duration-200">
-                          <p className="whitespace-pre-wrap text-sm">{pendingImageRequest.prompt}</p>
-                        </div>
-                      </div>
-                    </div>
-                    {/* 답변 로딩 중 */}
-                    <div className="flex justify-start">
-                      <div className="max-w-[85%]">
-                        <div className="rounded-lg overflow-hidden bg-secondary border border-border flex items-center justify-center min-h-[200px] w-[280px] text-muted-foreground text-sm">
-                          이미지 생성 중...
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* API는 최신순(-created_at)으로 오므로, 표시만 오래된순(맨 아래가 최신)으로 역순 처리 */}
                 {[...imageRecords].reverse().map((rec, index) => {
                   const isLastImage = index === imageRecords.length - 1;
                   return (
@@ -130,12 +113,12 @@ export function ChatView() {
                           <button
                             type="button"
                             onClick={() => setSelectedImageUrl(rec.image_url)}
-                            className="rounded-lg overflow-hidden bg-secondary border border-border block w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
+                            className="rounded-lg overflow-hidden bg-secondary border border-border block w-full text-left focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background min-h-[200px]"
                           >
                             <img
                               src={rec.image_url}
                               alt={rec.prompt}
-                              className="w-full h-auto object-cover max-h-[480px] cursor-pointer"
+                              className="w-full h-auto object-cover max-h-[480px] cursor-pointer min-h-[200px]"
                             />
                           </button>
                           <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 pointer-events-none group-hover/img:pointer-events-auto">
@@ -214,6 +197,26 @@ export function ChatView() {
                     </div>
                   );
                 })}
+                {pendingImageRequest?.sessionId === currentSession.id && (
+                  <div className="animate-fade-in-up">
+                    {/* 질문 먼저: 유저 풍선 (오른쪽) */}
+                    <div className="flex justify-end mb-2">
+                      <div className="max-w-[85%]">
+                        <div className="rounded-lg px-4 py-2 bg-primary text-primary-foreground transition-colors duration-200">
+                          <p className="whitespace-pre-wrap text-sm">{pendingImageRequest.prompt}</p>
+                        </div>
+                      </div>
+                    </div>
+                    {/* 답변 로딩 중 */}
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%]">
+                        <div className="rounded-lg overflow-hidden bg-secondary border border-border flex items-center justify-center min-h-[200px] w-[280px] text-muted-foreground text-sm">
+                          이미지 생성 중...
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </>
