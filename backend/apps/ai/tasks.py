@@ -1,3 +1,5 @@
+from typing import Optional
+
 from celery import shared_task
 from django.db import transaction
 from apps.chats.models import Message, ImageRecord, Job
@@ -7,7 +9,7 @@ from .errors import AIError
 
 
 @shared_task(bind=True, max_retries=2)
-def task_chat(self, job_id: int, prompt: str, model: str, system_prompt: str | None = None):
+def task_chat(self, job_id: int, prompt: str, model: str, system_prompt: Optional[str] = None):
     job = Job.objects.get(pk=job_id)
     job.status = 'running'
     job.save(update_fields=['status', 'updated_at'])
@@ -47,7 +49,6 @@ def task_image(self, job_id: int, prompt: str, model: str, aspect_ratio: str = '
     job.status = 'running'
     job.save(update_fields=['status', 'updated_at'])
 
-    # Retrieve reference image if provided
     ref_url = None
     ref_image = None
     if reference_image_id:

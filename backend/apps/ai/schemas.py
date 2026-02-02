@@ -1,12 +1,14 @@
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
 class TextGenerationRequest(BaseModel):
     prompt: str
     model: str = Field(default='google/gemini-2.5-flash')
-    system_prompt: str | None = None
+    system_prompt: Optional[str] = None
     temperature: float = Field(default=0.7, ge=0, le=2)
-    max_tokens: int | None = None
+    max_tokens: Optional[int] = None
 
 
 class ImageGenerationRequest(BaseModel):

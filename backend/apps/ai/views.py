@@ -22,7 +22,6 @@ def complete_chat(request):
     if session.kind != SESSION_KIND_CHAT:
         return Response({'detail': 'Not a chat session'}, status=status.HTTP_400_BAD_REQUEST)
     user_msg = Message.objects.create(session=session, role='user', content=body.prompt)
-    # 첫 메시지면 세션 제목을 사용자 첫 문구로 설정 (DB 기준으로 카운트해 역참조 캐시 이슈 방지)
     if Message.objects.filter(session_id=session.pk).count() == 1:
         new_title = (body.prompt.strip() or session.title)[:255]
         session.title = new_title
@@ -55,7 +54,6 @@ def complete_image(request):
     session = get_object_or_404(Session, pk=session_id)
     if session.kind != SESSION_KIND_IMAGE:
         return Response({'detail': 'Not an image session'}, status=status.HTTP_400_BAD_REQUEST)
-    # 첫 이미지 요청이면 세션 제목을 프롬프트로 설정
     if Job.objects.filter(session_id=session.pk, kind='image').count() == 0:
         new_title = (body.prompt.strip() or session.title)[:255]
         session.title = new_title

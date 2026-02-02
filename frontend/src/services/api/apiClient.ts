@@ -10,7 +10,6 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error((err as { detail?: string }).detail || res.statusText);
   }
-  // 204 No Content는 본문이 없어 res.json() 호출 시 에러 발생
   if (res.status === 204) {
     return undefined as T;
   }

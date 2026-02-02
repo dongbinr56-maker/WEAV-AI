@@ -3,6 +3,8 @@ fal.ai HTTP API: openrouter/router (chat), imagen4 (Google), flux-pro v1.1-ultra
 참고: 00_docs/imagen4-preview.txt, 00_docs/flux-pro_v1.1-ultra.txt
 """
 import os
+from typing import Optional
+
 import requests
 from .errors import FALError
 
@@ -24,7 +26,7 @@ def _fal_headers():
     return {'Authorization': f'Key {key}', 'Content-Type': 'application/json'}
 
 
-def chat_completion(prompt: str, model: str = 'google/gemini-2.5-flash', system_prompt: str | None = None, temperature: float = 0.7, max_tokens: int | None = None) -> str:
+def chat_completion(prompt: str, model: str = 'google/gemini-2.5-flash', system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: Optional[int] = None) -> str:
     payload = {'prompt': prompt, 'model': model, 'temperature': temperature}
     if system_prompt:
         payload['system_prompt'] = system_prompt

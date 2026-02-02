@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { chatApi } from '@/services/api/chatApi';
 import { useApp } from './AppContext';
 
@@ -6,8 +6,30 @@ const POLL_INTERVAL = 1500;
 const POLL_MAX = 60;
 const DEFAULT_CHAT_MODEL = 'google/gemini-2.5-flash';
 const DEFAULT_IMAGE_MODEL = 'fal-ai/imagen4/preview';
+const STORAGE_KEY = 'weav-session-models';
 
 type SessionModels = Record<number, { chat: string; image: string }>;
+
+function loadModelsFromStorage(): SessionModels {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, { chat: string; image: string }>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([k, v]) => [Number(k), v])
+    ) as SessionModels;
+  } catch {
+    return {};
+  }
+}
+
+function saveModelsToStorage(models: SessionModels) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(models));
+  } catch {
+    // ignore quota / private mode
+  }
+}
 
 function getStoredModels(stored: SessionModels | undefined, sessionId: number) {
   const s = stored?.[sessionId];
@@ -22,10 +44,10 @@ type ChatContextValue = {
   sending: boolean;
   error: string | null;
   sendChatMessage: (prompt: string, model: string) => Promise<void>;
-  sendImageRequest: (prompt: string, model: string, aspectRatio?: string) => Promise<void>;
+  sendImageRequest: (prompt: string, model: string, options?: { aspectRatio?: string }) => Promise<void>;
   stopGeneration: () => void;
   regenerateChat: (sessionId: number, options?: RegenerateChatOptions) => Promise<void>;
-  regenerateImage: (sessionId: number, aspectRatio?: string) => Promise<void>;
+  regenerateImage: (sessionId: number, options?: { aspectRatio?: string; prompt?: string }) => Promise<void>;
   getChatModel: (sessionId: number) => string;
   setChatModel: (sessionId: number, model: string) => void;
   getImageModel: (sessionId: number) => string;
@@ -34,25 +56,43 @@ type ChatContextValue = {
   regeneratePrompt: RegeneratePromptState;
   setRegeneratePrompt: (sessionId: number, prompt: string) => void;
   clearRegeneratePrompt: () => void;
+  /** 이미지 연필 클릭 시 하단 입력창에 넣을 내용 (이미지 재생성 모드) */
+  regenerateImagePrompt: RegeneratePromptState;
+  setRegenerateImagePrompt: (sessionId: number, prompt: string) => void;
+  clearRegenerateImagePrompt: () => void;
+  /** 이미지 생성 중인 질문 (질문 먼저 띄우기용) */
+  pendingImageRequest: { sessionId: number; prompt: string } | null;
   clearError: () => void;
 };
 
 const ChatContext = createContext<ChatContextValue | null>(null);
 
 export function ChatProvider({ children }: { children: React.ReactNode }) {
-  const { currentSession, refreshSession, patchSession } = useApp();
+  const { currentSession, refreshSession } = useApp();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [modelBySession, setModelBySession] = useState<SessionModels>({});
+  const [modelBySession, setModelBySession] = useState<SessionModels>(loadModelsFromStorage);
   const [regeneratePrompt, setRegeneratePromptState] = useState<RegeneratePromptState>(null);
+  const [regenerateImagePrompt, setRegenerateImagePromptState] = useState<RegeneratePromptState>(null);
+  const [pendingImageRequest, setPendingImageRequest] = useState<{ sessionId: number; prompt: string } | null>(null);
   const modelBySessionRef = useRef<SessionModels>({});
   modelBySessionRef.current = modelBySession;
+
+  useEffect(() => {
+    saveModelsToStorage(modelBySession);
+  }, [modelBySession]);
 
   const setRegeneratePrompt = useCallback((sessionId: number, prompt: string) => {
     setRegeneratePromptState({ sessionId, prompt });
   }, []);
   const clearRegeneratePrompt = useCallback(() => {
     setRegeneratePromptState(null);
+  }, []);
+  const setRegenerateImagePrompt = useCallback((sessionId: number, prompt: string) => {
+    setRegenerateImagePromptState({ sessionId, prompt });
+  }, []);
+  const clearRegenerateImagePrompt = useCallback(() => {
+    setRegenerateImagePromptState(null);
   }, []);
   const abortRef = useRef(false);
   const currentTaskIdRef = useRef<string | null>(null);
@@ -118,12 +158,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       try {
         const res = await chatApi.completeChat(sessionId, prompt, model);
         currentTaskIdRef.current = res.task_id;
-        const isFirstMessage = !currentSession.messages?.length;
-        if (isFirstMessage && prompt.trim()) {
-          await patchSession(sessionId, { title: prompt.trim().slice(0, 255) });
-        } else {
-          await refreshSession(sessionId);
-        }
+        await refreshSession(sessionId);
         await pollJob(res.task_id, sessionId);
       } catch (e) {
         currentTaskIdRef.current = null;
@@ -132,34 +167,31 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setSending(false);
       }
     },
-    [currentSession, pollJob, patchSession, refreshSession]
+    [currentSession, pollJob, refreshSession]
   );
 
   const sendImageRequest = useCallback(
-    async (prompt: string, model: string, aspectRatio?: string) => {
+    async (prompt: string, model: string, options?: { aspectRatio?: string }) => {
       if (!currentSession || currentSession.kind !== 'image') return;
       const sessionId = currentSession.id;
       abortRef.current = false;
       setSending(true);
       setError(null);
+      setPendingImageRequest({ sessionId, prompt });
       try {
-        const res = await chatApi.completeImage(sessionId, prompt, model, aspectRatio);
+        const res = await chatApi.completeImage(sessionId, prompt, model, options);
         currentTaskIdRef.current = res.task_id;
-        const isFirstImage = !currentSession.image_records?.length;
-        if (isFirstImage && prompt.trim()) {
-          await patchSession(sessionId, { title: prompt.trim().slice(0, 255) });
-        } else {
-          await refreshSession(sessionId);
-        }
+        await refreshSession(sessionId);
         await pollJob(res.task_id, sessionId);
       } catch (e) {
         currentTaskIdRef.current = null;
         setError(e instanceof Error ? e.message : '생성 실패');
       } finally {
+        setPendingImageRequest(null);
         setSending(false);
       }
     },
-    [currentSession, pollJob, patchSession, refreshSession]
+    [currentSession, pollJob, refreshSession]
   );
 
   const regenerateChat = useCallback(
@@ -186,13 +218,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   );
 
   const regenerateImage = useCallback(
-    async (sessionId: number, aspectRatio?: string) => {
+    async (sessionId: number, options?: { aspectRatio?: string; prompt?: string }) => {
       if (!currentSession || currentSession.kind !== 'image' || currentSession.id !== sessionId) return;
+      const prompt = options?.prompt;
+      if (prompt != null) setPendingImageRequest({ sessionId, prompt });
       abortRef.current = false;
       setSending(true);
       setError(null);
       try {
-        const res = await chatApi.regenerateImage(sessionId, aspectRatio);
+        const res = await chatApi.regenerateImage(sessionId, options?.aspectRatio);
         currentTaskIdRef.current = res.task_id;
         await refreshSession(sessionId);
         await pollJob(res.task_id, sessionId);
@@ -200,6 +234,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         currentTaskIdRef.current = null;
         setError(e instanceof Error ? e.message : '재생성 실패');
       } finally {
+        setPendingImageRequest(null);
         setSending(false);
       }
     },
@@ -221,6 +256,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     regeneratePrompt,
     setRegeneratePrompt,
     clearRegeneratePrompt,
+    regenerateImagePrompt,
+    setRegenerateImagePrompt,
+    clearRegenerateImagePrompt,
+    pendingImageRequest,
     clearError: () => setError(null),
   };
 

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { AppProvider, useApp } from '@/contexts/AppContext';
 import { ChatProvider } from '@/contexts/ChatContext';
+import { ToastProvider } from '@/contexts/ToastContext';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ChatView } from '@/components/chat/ChatView';
@@ -42,9 +43,11 @@ function AppContent() {
 export default function App() {
   return (
     <AppProvider>
-      <ChatProvider>
-        <AppContent />
-      </ChatProvider>
+      <ToastProvider>
+        <ChatProvider>
+          <AppContent />
+        </ChatProvider>
+      </ToastProvider>
     </AppProvider>
   );
 }

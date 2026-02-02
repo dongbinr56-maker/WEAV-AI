@@ -11,8 +11,18 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+def _bool(val):
+    if isinstance(val, bool):
+        return val
+    v = str(val).strip().lower()
+    if v in ('true', '1', 'yes', 'on'):
+        return True
+    if v in ('false', '0', 'no', 'off', 'warn', ''):
+        return False
+    return False
+
 SECRET_KEY = config('SECRET_KEY', default='change-me-in-production')
-DEBUG = config('DEBUG', default=True, cast=bool)
+DEBUG = _bool(config('DEBUG', default=True))
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1,api', cast=Csv())
 
 AUTH_USER_MODEL = 'users.User'
@@ -84,8 +94,6 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-MEDIA_URL = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

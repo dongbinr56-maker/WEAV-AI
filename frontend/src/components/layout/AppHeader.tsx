@@ -11,12 +11,12 @@ export const AppHeader = forwardRef<HTMLButtonElement, AppHeaderProps>(function 
   ref
 ) {
   return (
-    <header className="sticky top-0 z-30 flex items-center h-14 px-4 bg-card border-b border-border">
+    <header className="sticky top-0 z-30 flex items-center h-14 px-4 bg-card border-b border-border transition-colors duration-200">
       <button
         ref={ref}
         type="button"
         onClick={onMenuClick}
-        className="p-2 rounded hover:bg-accent text-primary-foreground"
+        className="p-2 rounded hover:bg-accent text-primary-foreground transition-colors duration-200"
         aria-label={sidebarOpen ? '메뉴 닫기' : '메뉴 열기'}
         aria-expanded={sidebarOpen}
         title={sidebarOpen ? '메뉴 닫기' : '메뉴 열기'}

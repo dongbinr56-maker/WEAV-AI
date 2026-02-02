@@ -1,6 +1,7 @@
 """
 Model-specific system prompt rules shared across sync and async workflows.
 """
+from typing import Optional
 
 MODEL_MAX_CHARS_RULES = {
     'openai/gpt-4o-mini':
@@ -31,7 +32,7 @@ MODEL_MAX_CHARS_RULES = {
 }
 
 
-def prepend_model_rule(system_prompt: str | None, model: str | None) -> str | None:
+def prepend_model_rule(system_prompt: Optional[str], model: Optional[str]) -> Optional[str]:
     rule = MODEL_MAX_CHARS_RULES.get((model or '').lower())
     if not rule:
         return system_prompt
