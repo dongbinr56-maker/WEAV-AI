@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pencil, X, Download, Share2 } from 'lucide-react';
+import { Pencil, X, Download, Share2, ImagePlus, Check } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { useChat } from '@/contexts/ChatContext';
 import { useToast } from '@/contexts/ToastContext';
@@ -8,7 +8,7 @@ import { ChatInput } from './ChatInput';
 
 export function ChatView() {
   const { currentSession } = useApp();
-  const { setRegeneratePrompt, setRegenerateImagePrompt, pendingImageRequest, sending } = useChat();
+  const { setRegeneratePrompt, setRegenerateImagePrompt, pendingImageRequest, sending, getReferenceImageId, setReferenceImageId } = useChat();
   const { showToast } = useToast();
   const endRef = useRef<HTMLDivElement>(null);
   const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
@@ -27,18 +27,26 @@ export function ChatView() {
 
   const isChat = currentSession.kind === 'chat';
   const messages = currentSession.messages ?? [];
+  const responseCount = messages.filter((m) => m.role === 'assistant').length;
   const imageRecords = currentSession.image_records ?? [];
+  const referenceImageId = getReferenceImageId(currentSession.id);
 
   return (
-    <div className="flex-1 flex flex-col w-full max-w-3xl mx-auto">
+    <div className="flex-1 flex flex-col w-full max-w-3xl mx-auto animate-fade-in">
       <main className="flex-1 overflow-y-auto px-4 pt-6 pb-40">
         {isChat ? (
           messages.length === 0 ? (
-            <div className="text-center text-muted-foreground py-12 animate-fade-in">
+            <div className="text-center text-muted-foreground py-12 animate-fade-in-up">
               <p>메시지를 입력하고 전송하세요.</p>
             </div>
           ) : (
-            messages.map((msg) => {
+            <>
+              {responseCount < 10 && (
+                <div className="mb-4 rounded-lg bg-muted/50 border border-border px-3 py-2 text-sm text-muted-foreground animate-fade-in-up">
+                  응답이 10회 미만입니다 (현재 {responseCount}회). 10회 이상 대화 시 일부 기능이 활성화됩니다.
+                </div>
+              )}
+              {messages.map((msg) => {
               const lastUserMsg =
                 messages.length >= 2 && messages[messages.length - 1].role === 'assistant'
                   ? messages[messages.length - 2]
@@ -57,12 +65,13 @@ export function ChatView() {
                   }
                 />
               );
-            })
+            })}
+            </>
           )
         ) : (
           <>
             {imageRecords.length === 0 ? (
-              <div className="text-center text-muted-foreground py-12 animate-fade-in">
+              <div className="text-center text-muted-foreground py-12 animate-fade-in-up">
                 <p>이미지 설명을 입력하고 생성하세요.</p>
               </div>
             ) : (
@@ -90,7 +99,11 @@ export function ChatView() {
                 {[...imageRecords].reverse().map((rec, index) => {
                   const isLastImage = index === imageRecords.length - 1;
                   return (
-                    <div key={rec.id} className="animate-fade-in-up group/image">
+                    <div
+                      key={rec.id}
+                      className={`animate-fade-in-up group/image rounded-lg overflow-hidden ${referenceImageId === rec.id ? 'ring-2 ring-primary ring-offset-2 ring-offset-background' : ''}`}
+                      style={{ animationDelay: `${index * 80}ms` }}
+                    >
                       {/* 질문: 유저 풍선 (오른쪽) + 재생성 버튼 */}
                       <div className="flex justify-end mb-2 items-start gap-2">
                         <div className="max-w-[85%]">
@@ -126,6 +139,22 @@ export function ChatView() {
                             />
                           </button>
                           <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover/img:opacity-100 transition-opacity duration-200 pointer-events-none group-hover/img:pointer-events-auto">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setReferenceImageId(currentSession.id, referenceImageId === rec.id ? null : rec.id);
+                              }}
+                              className={`p-1.5 rounded transition-colors duration-200 ${
+                                referenceImageId === rec.id
+                                  ? 'bg-primary text-primary-foreground'
+                                  : 'bg-black/60 text-white hover:bg-black/80'
+                              }`}
+                              title={referenceImageId === rec.id ? '참조 해제' : '참조로 사용 (구도·스타일 유지)'}
+                              aria-label={referenceImageId === rec.id ? '참조 해제' : '참조로 사용'}
+                            >
+                              {referenceImageId === rec.id ? <Check size={14} /> : <ImagePlus size={14} />}
+                            </button>
                             <button
                               type="button"
                               onClick={async (e) => {
@@ -212,7 +241,7 @@ export function ChatView() {
           <img
             src={selectedImageUrl}
             alt="크게 보기"
-            className="max-w-full max-h-[90vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
+            className="max-w-full max-h-[90vh] w-auto h-auto object-contain rounded-lg shadow-2xl animate-scale-in"
             onClick={(e) => e.stopPropagation()}
           />
         </div>

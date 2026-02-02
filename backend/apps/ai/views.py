@@ -1,8 +1,14 @@
+import logging
+import uuid
+from pathlib import Path
+
+from django.conf import settings
+from django.http import Http404
+from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from django.shortcuts import get_object_or_404
-from django.http import Http404
+
 from apps.chats.models import Session, Message, Job, SESSION_KIND_CHAT, SESSION_KIND_IMAGE
 from apps.chats.serializers import MessageSerializer, ImageRecordSerializer
 from .schemas import TextGenerationRequest, ImageGenerationRequest
@@ -45,7 +51,6 @@ def complete_chat(request):
     except Http404:
         raise
     except Exception as e:
-        import logging
         logging.getLogger(__name__).exception("complete_chat error")
         return Response({'detail': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -73,6 +78,11 @@ def complete_image(request):
         model=body.model or IMAGE_MODEL_GOOGLE,
         aspect_ratio=body.aspect_ratio,
         num_images=body.num_images,
+        reference_image_id=body.reference_image_id,
+        reference_image_url=body.reference_image_url,
+        resolution=body.resolution,
+        output_format=body.output_format,
+        seed=body.seed,
     )
     job.task_id = task.id
     job.save(update_fields=['task_id'])
@@ -80,6 +90,38 @@ def complete_image(request):
         'task_id': task.id,
         'job_id': job.id,
     }, status=status.HTTP_202_ACCEPTED)
+
+
+ALLOWED_REFERENCE_IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
+MAX_REFERENCE_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+@api_view(['POST'])
+def upload_reference_image(request):
+    """참조 이미지 업로드. multipart file 'image' 전달. 반환: { url: 공개 URL }"""
+    if 'image' not in request.FILES:
+        return Response({'detail': 'image file required'}, status=status.HTTP_400_BAD_REQUEST)
+    f = request.FILES['image']
+    if f.content_type not in ALLOWED_REFERENCE_IMAGE_TYPES:
+        return Response(
+            {'detail': f'Allowed types: {", ".join(ALLOWED_REFERENCE_IMAGE_TYPES)}'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if f.size > MAX_REFERENCE_IMAGE_SIZE:
+        return Response({'detail': 'File too large (max 10MB)'}, status=status.HTTP_400_BAD_REQUEST)
+    ext = Path(f.name).suffix or '.png'
+    if ext.lower() not in ('.jpg', '.jpeg', '.png', '.webp'):
+        ext = '.png'
+    ref_dir = Path(settings.MEDIA_ROOT) / 'ref_uploads'
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    name = f"{uuid.uuid4().hex}{ext}"
+    path = ref_dir / name
+    with open(path, 'wb') as out:
+        for chunk in f.chunks():
+            out.write(chunk)
+    rel_url = f"{settings.MEDIA_URL}ref_uploads/{name}"
+    url = request.build_absolute_uri(rel_url)
+    return Response({'url': url}, status=status.HTTP_201_CREATED)
 
 
 @api_view(['POST'])
@@ -144,6 +186,9 @@ def regenerate_image(request):
         model=model,
         aspect_ratio=request.data.get('aspect_ratio') or '1:1',
         num_images=1,
+        resolution=request.data.get('resolution'),
+        output_format=request.data.get('output_format'),
+        seed=request.data.get('seed'),
     )
     job.task_id = task.id
     job.save(update_fields=['task_id'])

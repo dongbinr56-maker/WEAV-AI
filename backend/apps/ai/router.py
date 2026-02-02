@@ -1,6 +1,6 @@
 from typing import Optional
 
-from .fal_client import chat_completion, image_generation_fal, FAL_IMAGEN4, FAL_FLUX_ULTRA, FAL_KLING
+from .fal_client import chat_completion, image_generation_fal, FAL_IMAGEN4, FAL_FLUX_ULTRA, FAL_KLING, FAL_GEMINI3_PRO_IMAGE
 from .errors import AIError
 
 CHAT_MODELS = [
@@ -14,6 +14,7 @@ CHAT_MODELS = [
 IMAGE_MODEL_GOOGLE = FAL_IMAGEN4
 IMAGE_MODEL_FLUX = FAL_FLUX_ULTRA
 IMAGE_MODEL_KLING = FAL_KLING
+IMAGE_MODEL_GEMINI3_PRO_IMAGE = FAL_GEMINI3_PRO_IMAGE
 
 
 def run_chat(prompt: str, model: str = 'google/gemini-2.5-flash', system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: Optional[int] = None) -> str:

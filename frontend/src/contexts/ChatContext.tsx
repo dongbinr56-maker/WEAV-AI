@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { chatApi } from '@/services/api/chatApi';
 import { useApp } from './AppContext';
+import { getDefaultImageOptions, type ImageGenOptions } from '@/constants/models';
 
 const POLL_INTERVAL = 1500;
 const POLL_MAX = 60;
@@ -44,10 +45,10 @@ type ChatContextValue = {
   sending: boolean;
   error: string | null;
   sendChatMessage: (prompt: string, model: string) => Promise<void>;
-  sendImageRequest: (prompt: string, model: string, options?: { aspectRatio?: string }) => Promise<void>;
+  sendImageRequest: (prompt: string, model: string, options?: { referenceImageId?: number; referenceImageUrl?: string } & Partial<ImageGenOptions>) => Promise<void>;
   stopGeneration: () => void;
   regenerateChat: (sessionId: number, options?: RegenerateChatOptions) => Promise<void>;
-  regenerateImage: (sessionId: number, options?: { aspectRatio?: string; prompt?: string }) => Promise<void>;
+  regenerateImage: (sessionId: number, options?: { prompt?: string } & Partial<ImageGenOptions>) => Promise<void>;
   getChatModel: (sessionId: number) => string;
   setChatModel: (sessionId: number, model: string) => void;
   getImageModel: (sessionId: number) => string;
@@ -62,6 +63,15 @@ type ChatContextValue = {
   clearRegenerateImagePrompt: () => void;
   /** 이미지 생성 중인 질문 (질문 먼저 띄우기용) */
   pendingImageRequest: { sessionId: number; prompt: string } | null;
+  /** 이미지 세션별 참조 이미지 ID (세션 내 생성 이미지 선택) */
+  getReferenceImageId: (sessionId: number) => number | null;
+  setReferenceImageId: (sessionId: number, imageRecordId: number | null) => void;
+  /** 이미지 세션별 업로드한 참조 이미지 URL */
+  getReferenceImageUrl: (sessionId: number) => string | null;
+  setReferenceImageUrl: (sessionId: number, url: string | null) => void;
+  /** 이미지 세션별 생성 옵션 (비율, 해상도, 포맷 등) */
+  getImageSettings: (sessionId: number, modelId: string) => ImageGenOptions;
+  setImageSettings: (sessionId: number, settings: Partial<ImageGenOptions>) => void;
   clearError: () => void;
 };
 
@@ -75,6 +85,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [regeneratePrompt, setRegeneratePromptState] = useState<RegeneratePromptState>(null);
   const [regenerateImagePrompt, setRegenerateImagePromptState] = useState<RegeneratePromptState>(null);
   const [pendingImageRequest, setPendingImageRequest] = useState<{ sessionId: number; prompt: string } | null>(null);
+  const [referenceImageIdBySession, setReferenceImageIdBySession] = useState<Record<number, number | null>>({});
+  const [referenceImageUrlBySession, setReferenceImageUrlBySession] = useState<Record<number, string | null>>({});
+  const [imageSettingsBySession, setImageSettingsBySession] = useState<Record<number, Partial<ImageGenOptions>>>({});
   const modelBySessionRef = useRef<SessionModels>({});
   modelBySessionRef.current = modelBySession;
 
@@ -111,6 +124,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setModelBySession((prev) => ({
       ...prev,
       [sessionId]: { ...getStoredModels(prev, sessionId), image: model },
+    }));
+  }, []);
+  const getReferenceImageId = useCallback((sessionId: number) => referenceImageIdBySession[sessionId] ?? null, [referenceImageIdBySession]);
+  const setReferenceImageId = useCallback((sessionId: number, imageRecordId: number | null) => {
+    setReferenceImageIdBySession((prev) => ({ ...prev, [sessionId]: imageRecordId }));
+    if (imageRecordId != null) setReferenceImageUrlBySession((prev) => ({ ...prev, [sessionId]: null }));
+  }, []);
+  const getReferenceImageUrl = useCallback((sessionId: number) => referenceImageUrlBySession[sessionId] ?? null, [referenceImageUrlBySession]);
+  const setReferenceImageUrl = useCallback((sessionId: number, url: string | null) => {
+    setReferenceImageUrlBySession((prev) => ({ ...prev, [sessionId]: url }));
+    if (url != null) setReferenceImageIdBySession((prev) => ({ ...prev, [sessionId]: null }));
+  }, []);
+  const getImageSettings = useCallback((sessionId: number, modelId: string): ImageGenOptions => {
+    const defaults = getDefaultImageOptions(modelId);
+    const overrides = imageSettingsBySession[sessionId];
+    return { ...defaults, ...overrides };
+  }, [imageSettingsBySession]);
+  const setImageSettings = useCallback((sessionId: number, settings: Partial<ImageGenOptions>) => {
+    setImageSettingsBySession((prev) => ({
+      ...prev,
+      [sessionId]: { ...prev[sessionId], ...settings },
     }));
   }, []);
 
@@ -171,15 +205,27 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   );
 
   const sendImageRequest = useCallback(
-    async (prompt: string, model: string, options?: { aspectRatio?: string }) => {
+    async (prompt: string, model: string, options?: { referenceImageId?: number; referenceImageUrl?: string } & Partial<ImageGenOptions>) => {
       if (!currentSession || currentSession.kind !== 'image') return;
       const sessionId = currentSession.id;
       abortRef.current = false;
       setSending(true);
       setError(null);
       setPendingImageRequest({ sessionId, prompt });
+      const refUrl = options?.referenceImageUrl ?? referenceImageUrlBySession[sessionId] ?? null;
+      const refId = refUrl == null ? (options?.referenceImageId ?? referenceImageIdBySession[sessionId] ?? null) : null;
+      const settings = getImageSettings(sessionId, model);
+      const merged = { ...settings, ...options };
       try {
-        const res = await chatApi.completeImage(sessionId, prompt, model, options);
+        const res = await chatApi.completeImage(sessionId, prompt, model, {
+          aspectRatio: merged.aspect_ratio,
+          numImages: merged.num_images,
+          ...(refUrl != null && refUrl !== '' && { referenceImageUrl: refUrl }),
+          ...(refId != null && { referenceImageId: refId }),
+          resolution: merged.resolution,
+          outputFormat: merged.output_format,
+          seed: merged.seed,
+        });
         currentTaskIdRef.current = res.task_id;
         await refreshSession(sessionId);
         await pollJob(res.task_id, sessionId);
@@ -191,7 +237,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setSending(false);
       }
     },
-    [currentSession, pollJob, refreshSession]
+    [currentSession, getImageSettings, pollJob, refreshSession, referenceImageIdBySession, referenceImageUrlBySession]
   );
 
   const regenerateChat = useCallback(
@@ -218,15 +264,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   );
 
   const regenerateImage = useCallback(
-    async (sessionId: number, options?: { aspectRatio?: string; prompt?: string }) => {
+    async (sessionId: number, options?: { prompt?: string } & Partial<ImageGenOptions>) => {
       if (!currentSession || currentSession.kind !== 'image' || currentSession.id !== sessionId) return;
       const prompt = options?.prompt;
       if (prompt != null) setPendingImageRequest({ sessionId, prompt });
+      const imageModel = getImageModel(sessionId);
+      const settings = getImageSettings(sessionId, imageModel);
+      const merged = { ...settings, ...options };
       abortRef.current = false;
       setSending(true);
       setError(null);
       try {
-        const res = await chatApi.regenerateImage(sessionId, options?.aspectRatio);
+        const res = await chatApi.regenerateImage(sessionId, {
+          aspectRatio: merged.aspect_ratio,
+          resolution: merged.resolution,
+          outputFormat: merged.output_format,
+          seed: merged.seed,
+        });
         currentTaskIdRef.current = res.task_id;
         await refreshSession(sessionId);
         await pollJob(res.task_id, sessionId);
@@ -238,7 +292,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setSending(false);
       }
     },
-    [currentSession, pollJob, refreshSession]
+    [currentSession, getImageModel, getImageSettings, pollJob, refreshSession]
   );
 
   const value: ChatContextValue = {
@@ -260,6 +314,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     setRegenerateImagePrompt,
     clearRegenerateImagePrompt,
     pendingImageRequest,
+    getReferenceImageId,
+    setReferenceImageId,
+    getReferenceImageUrl,
+    setReferenceImageUrl,
+    getImageSettings,
+    setImageSettings,
     clearError: () => setError(null),
   };
 

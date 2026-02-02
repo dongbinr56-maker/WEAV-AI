@@ -23,7 +23,11 @@ export function ChatMessage({ message, isLastUserMessage, onEditRequested }: Cha
   };
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4 animate-fade-in-up group/msg`}>
+    <div
+      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4 group/msg ${
+        isUser ? 'animate-slide-in-right' : 'animate-slide-in-left'
+      }`}
+    >
       <div className={`flex items-start gap-2 max-w-[85%] ${isUser ? 'flex-row' : ''}`}>
         <div
           className={`rounded-lg px-4 py-2 transition-colors duration-200 ${

@@ -56,14 +56,14 @@ def task_chat(self, job_id: int, prompt: str, model: str, system_prompt: Optiona
 
 
 @shared_task(bind=True, max_retries=2)
-def task_image(self, job_id: int, prompt: str, model: str, aspect_ratio: str = '1:1', num_images: int = 1, seed: int = None, reference_image_id: int = None, mask_url: str = None):
+def task_image(self, job_id: int, prompt: str, model: str, aspect_ratio: str = '1:1', num_images: int = 1, seed: int = None, reference_image_id: int = None, reference_image_url: str = None, mask_url: str = None, resolution: str = None, output_format: str = None):
     job = Job.objects.get(pk=job_id)
     job.status = 'running'
     job.save(update_fields=['status', 'updated_at'])
 
-    ref_url = None
+    ref_url = reference_image_url
     ref_image = None
-    if reference_image_id:
+    if ref_url is None and reference_image_id:
         try:
             ref_image = ImageRecord.objects.get(pk=reference_image_id)
             ref_url = ref_image.image_url
@@ -80,7 +80,9 @@ def task_image(self, job_id: int, prompt: str, model: str, aspect_ratio: str = '
             num_images=num_images,
             seed=seed,
             reference_image_url=ref_url,
-            mask_url=mask_url
+            mask_url=mask_url,
+            resolution=resolution,
+            output_format=output_format,
         )
 
         if not images:

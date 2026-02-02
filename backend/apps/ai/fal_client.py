@@ -17,6 +17,10 @@ FAL_IMAGEN4 = 'fal-ai/imagen4/preview'
 FAL_FLUX_ULTRA = 'fal-ai/flux-pro/v1.1-ultra'
 # Kling (Placeholder endpoint)
 FAL_KLING = 'kling-ai/kling-v1'
+# Gemini 3 Pro Image Preview (Google, Nano Banana Pro): text-to-image
+FAL_GEMINI3_PRO_IMAGE = 'fal-ai/gemini-3-pro-image-preview'
+# Gemini 3 Pro Image Preview Edit: image_urls required, up to 2 ref images
+FAL_GEMINI3_PRO_IMAGE_EDIT = 'fal-ai/gemini-3-pro-image-preview/edit'
 
 
 def _fal_headers():
@@ -46,19 +50,56 @@ def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: st
     - Imagen 4: aspect_ratio "1:1"|"16:9"|"9:16"|"4:3"|"3:4", num_images 1~4
     - FLUX Pro v1.1 Ultra: aspect_ratio "21:9"|"16:9"|"4:3"|"3:2"|"1:1"|"2:3"|"3:4"|"9:16"|"9:21"
     - Kling: supports seed, reference_image_url, mask_url
+    - Gemini 3 Pro Image Preview: text-to-image; reference_image_url 있으면 edit 엔드포인트(image_urls) 사용
     """
     num_images = max(1, min(4, num_images))
 
-    if 'imagen' in model.lower():
+    if 'gemini-3-pro-image-preview' in model.lower():
+        ref_url = kwargs.get('reference_image_url')
+        allowed_ratio = ('21:9', '16:9', '3:2', '4:3', '5:4', '1:1', '4:5', '3:4', '2:3', '9:16')
+        res = kwargs.get('resolution') or '1K'
+        res = res if res in ('1K', '2K', '4K') else '1K'
+        out_fmt = kwargs.get('output_format') or 'png'
+        out_fmt = out_fmt if out_fmt in ('png', 'jpeg', 'webp') else 'png'
+        if ref_url:
+            # 참조 이미지 있음 → edit API (이미지 기반 편집)
+            endpoint = FAL_GEMINI3_PRO_IMAGE_EDIT
+            payload = {
+                'prompt': prompt,
+                'num_images': num_images,
+                'image_urls': [ref_url],
+                'aspect_ratio': aspect_ratio if aspect_ratio in allowed_ratio else 'auto',
+                'output_format': out_fmt,
+                'resolution': res,
+            }
+            if kwargs.get('seed') is not None:
+                payload['seed'] = kwargs['seed']
+        else:
+            # 참조 없음 → text-to-image
+            endpoint = FAL_GEMINI3_PRO_IMAGE
+            payload = {
+                'prompt': prompt,
+                'num_images': num_images,
+                'aspect_ratio': aspect_ratio if aspect_ratio in allowed_ratio else '1:1',
+                'output_format': out_fmt,
+                'resolution': res,
+            }
+            if kwargs.get('seed') is not None:
+                payload['seed'] = kwargs['seed']
+    elif 'imagen' in model.lower():
         # Imagen4 Preview
         endpoint = FAL_IMAGEN4
         allowed_ratio = ('1:1', '16:9', '9:16', '4:3', '3:4')
+        res = kwargs.get('resolution') or '1K'
+        res = res if res in ('1K', '2K') else '1K'
+        out_fmt = kwargs.get('output_format') or 'png'
+        out_fmt = out_fmt if out_fmt in ('png', 'jpeg', 'webp') else 'png'
         payload = {
             'prompt': prompt,
             'num_images': num_images,
             'aspect_ratio': aspect_ratio if aspect_ratio in allowed_ratio else '1:1',
-            'resolution': '1K',
-            'output_format': 'png',
+            'resolution': res,
+            'output_format': out_fmt,
         }
     elif 'kling' in model.lower():
         # Kling (Visual Continuity)
@@ -80,11 +121,13 @@ def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: st
         # FLUX Pro v1.1 Ultra
         endpoint = FAL_FLUX_ULTRA
         allowed_ratio = ('21:9', '16:9', '4:3', '3:2', '1:1', '2:3', '3:4', '9:16', '9:21')
+        out_fmt = kwargs.get('output_format') or 'jpeg'
+        out_fmt = out_fmt if out_fmt in ('jpeg', 'png') else 'jpeg'
         payload = {
             'prompt': prompt,
             'num_images': num_images,
             'aspect_ratio': aspect_ratio if aspect_ratio in allowed_ratio else '16:9',
-            'output_format': 'jpeg',
+            'output_format': out_fmt,
         }
 
     r = requests.post(f'{FAL_BASE}/{endpoint}', headers=_fal_headers(), json=payload, timeout=180)
