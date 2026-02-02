@@ -1,4 +1,4 @@
-from .fal_client import chat_completion, image_generation_fal
+from .fal_client import chat_completion, image_generation_fal, FAL_IMAGEN4, FAL_FLUX_ULTRA, FAL_KLING
 from .errors import AIError
 
 CHAT_MODELS = [
@@ -9,13 +9,18 @@ CHAT_MODELS = [
     'openai/gpt-5-chat',
 ]
 
-IMAGE_MODEL_GOOGLE = 'fal-ai/imagen4/preview'
-IMAGE_MODEL_FLUX = 'fal-ai/flux-pro/v1.1-ultra'
+IMAGE_MODEL_GOOGLE = FAL_IMAGEN4
+IMAGE_MODEL_FLUX = FAL_FLUX_ULTRA
+IMAGE_MODEL_KLING = FAL_KLING
 
 
 def run_chat(prompt: str, model: str = 'google/gemini-2.5-flash', system_prompt: str | None = None, temperature: float = 0.7, max_tokens: int | None = None) -> str:
     return chat_completion(prompt, model=model, system_prompt=system_prompt, temperature=temperature, max_tokens=max_tokens)
 
 
-def run_image(prompt: str, model: str = IMAGE_MODEL_GOOGLE, aspect_ratio: str = '1:1', num_images: int = 1) -> list[dict]:
-    return image_generation_fal(prompt, model=model, aspect_ratio=aspect_ratio, num_images=num_images)
+def run_image(prompt: str, model: str = IMAGE_MODEL_GOOGLE, aspect_ratio: str = '1:1', num_images: int = 1, **kwargs) -> list[dict]:
+    """
+    Generate images using the specified model.
+    kwargs can include: seed, reference_image_url, mask_url
+    """
+    return image_generation_fal(prompt, model=model, aspect_ratio=aspect_ratio, num_images=num_images, **kwargs)

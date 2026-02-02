@@ -1,4 +1,5 @@
 from django.db import models
+from pgvector.django import VectorField
 
 SESSION_KIND_CHAT = 'chat'
 SESSION_KIND_IMAGE = 'image'
@@ -18,6 +19,17 @@ class Session(models.Model):
         ordering = ['-updated_at']
 
 
+class ChatMemory(models.Model):
+    session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='memories')
+    content = models.TextField()
+    embedding = VectorField(dimensions=1536)  # OpenAI text-embedding-3-small
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+
 class Message(models.Model):
     session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='messages')
     role = models.CharField(max_length=20)  # user | assistant
@@ -32,7 +44,11 @@ class ImageRecord(models.Model):
     session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='image_records')
     prompt = models.TextField()
     image_url = models.URLField(max_length=2048)
+    mask_url = models.URLField(max_length=2048, blank=True, null=True)
     model = models.CharField(max_length=128)
+    seed = models.BigIntegerField(null=True, blank=True)
+    reference_image = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='derived_images')
+    metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

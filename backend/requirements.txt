@@ -10,3 +10,5 @@ pydantic>=2.5,<3
 gunicorn==21
 celery[redis]==5.3
 redis>=5.0
+pgvector
+openai
