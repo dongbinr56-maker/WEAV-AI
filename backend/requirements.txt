@@ -12,3 +12,6 @@ celery[redis]==5.3
 redis>=5.0
 pgvector
 openai
+boto3
+pymupdf
+fal-client

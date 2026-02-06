@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'apps.chats',
     'apps.core',
     'apps.ai',
+    'jobs',
 ]
 
 MIDDLEWARE = [
@@ -116,3 +117,11 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 
 FAL_KEY = config('FAL_KEY', default='')
+
+# MinIO Settings
+MINIO_ENDPOINT = config('MINIO_ENDPOINT', default='localhost:9000')
+MINIO_ACCESS_KEY = config('MINIO_ACCESS_KEY', default='minioadmin')
+MINIO_SECRET_KEY = config('MINIO_SECRET_KEY', default='minioadmin')
+MINIO_BUCKET_NAME = config('MINIO_BUCKET_NAME', default='weav-ai')
+MINIO_USE_SSL = _bool(config('MINIO_USE_SSL', default=False))
+
