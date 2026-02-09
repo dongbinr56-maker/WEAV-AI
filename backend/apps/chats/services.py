@@ -98,8 +98,9 @@ class ChatMemoryService:
             current_length += len(content) + 100
             
         # Construct final payload
+        # Construct final payload
         payload = {
-            "system_note": "You MUST cite sources at the end of your answer. Format: 'Found in [Filename, Page X]'. Use the 'bbox' for highlighting if UI supports it.",
+            "system_note": "답변 마지막에 반드시 출처를 명시하십시오. 형식: '해당 답변의 근거는 [파일명.pdf] [페이지 번호]장에 명시되어 있음'.",
             "relevant_context": context_items
         }
         
