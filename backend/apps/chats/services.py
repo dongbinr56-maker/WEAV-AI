@@ -56,36 +56,54 @@ class ChatMemoryService:
         # Order by Cosine Distance (smaller is closer)
         return qs.order_by(CosineDistance('embedding', embedding))[:limit]
 
-    
     def get_relevant_context(self, session_id: int, query: str, max_chars: int = 3000) -> str:
         """
         Retrieves relevant context for the given query within the character limit.
-        Prioritizes semantic relevance (cosine similarity).
+        Returns a JSON-formatted string with citations:
+        {
+            "instructions": "Use the provided context to answer. Cite sources using [Filename, Page X].",
+            "context": [
+                {"text": "...", "source": "file.pdf", "page": 1, "bbox": [x,y,w,h]}
+            ]
+        }
         """
+        import json
+        
         if not query:
             return ""
 
         # Fetch top relevant chunks
-        # We fetch a bit more initially to filter/sort
         memories = self.search_memory([session_id], query, limit=10)
         
-        context_parts = []
+        context_items = []
         current_length = 0
         
         for memory in memories:
             content = memory.content.strip()
-            if current_length + len(content) + 1 > max_chars:
+            # Estimate JSON overhead per item ~100 chars
+            if current_length + len(content) + 100 > max_chars:
                 break
             
-            # Format: [Source: source_name] Content
-            # Or just content. Let's keep it simple or use metadata.
-            source = memory.metadata.get('source', 'chat')
-            formatted_content = f"[{source.upper()}]: {content}"
+            # Extract metadata
+            meta = memory.metadata or {}
+            item = {
+                "text": content,
+                "source": meta.get('filename', 'chat_history'),
+                "page": meta.get('page', 1),
+                "bbox": meta.get('bbox', []),
+                "type": meta.get('source', 'chat')
+            }
             
-            context_parts.append(formatted_content)
-            current_length += len(formatted_content) + 1
+            context_items.append(item)
+            current_length += len(content) + 100
             
-        return "\n".join(context_parts)
+        # Construct final payload
+        payload = {
+            "system_note": "You MUST cite sources at the end of your answer. Format: 'Found in [Filename, Page X]'. Use the 'bbox' for highlighting if UI supports it.",
+            "relevant_context": context_items
+        }
+        
+        return json.dumps(payload, ensure_ascii=False)
 
     def get_image_context(self, session_id: int) -> dict:
         """
