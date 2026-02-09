@@ -4,9 +4,11 @@ from pgvector.django import VectorField
 
 SESSION_KIND_CHAT = 'chat'
 SESSION_KIND_IMAGE = 'image'
+SESSION_KIND_STUDIO = 'studio'
 SESSION_KIND_CHOICES = [
     (SESSION_KIND_CHAT, 'Chat'),
     (SESSION_KIND_IMAGE, 'Image'),
+    (SESSION_KIND_STUDIO, 'Studio'),
 ]
 
 

@@ -6,9 +6,10 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
-from .models import Session, Message, ImageRecord, Document, SESSION_KIND_CHAT, SESSION_KIND_IMAGE
+from .models import Session, Message, ImageRecord, Document, SESSION_KIND_CHAT, SESSION_KIND_IMAGE, SESSION_KIND_STUDIO
 from .serializers import SessionListSerializer, SessionDetailSerializer, MessageSerializer, ImageRecordSerializer
 from .tasks import process_pdf_document
+
 try:
     from storage.s3 import minio_client
 except ImportError:
@@ -29,14 +30,14 @@ def session_list(request):
         if request.user.is_authenticated:
              qs = qs.filter(user=request.user)
              
-        if kind in (SESSION_KIND_CHAT, SESSION_KIND_IMAGE):
+        if kind in (SESSION_KIND_CHAT, SESSION_KIND_IMAGE, SESSION_KIND_STUDIO):
             qs = qs.filter(kind=kind)
         serializer = SessionListSerializer(qs, many=True)
         return Response(serializer.data)
         
     kind = request.data.get('kind', SESSION_KIND_CHAT)
     title = request.data.get('title', '')[:255]
-    if kind not in (SESSION_KIND_CHAT, SESSION_KIND_IMAGE):
+    if kind not in (SESSION_KIND_CHAT, SESSION_KIND_IMAGE, SESSION_KIND_STUDIO):
         kind = SESSION_KIND_CHAT
     
     user = request.user if request.user.is_authenticated else None
@@ -121,11 +122,6 @@ def session_upload(request, session_id):
     try:
         # Upload
         logger.info(f"Uploading file {key} to MinIO")
-        # minio_client.upload_file returns a URL, but we also want the key.
-        # existing upload_file returns URL. Ideally we need the key for internal processing. 
-        # But our improved storage.s3 wrapper might simplify this.
-        # Actually minio_client.upload_file takes (file_obj, filename) and returns URL.
-        # We passed 'key' as filename.
         file_url = minio_client.upload_file(file_obj, key)
         
         # Create Document Record

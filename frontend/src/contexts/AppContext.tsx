@@ -8,7 +8,7 @@ type AppContextValue = {
   loading: boolean;
   loadSessions: () => Promise<void>;
   selectSession: (session: Session | null) => Promise<void>;
-  createSession: (kind: 'chat' | 'image', title?: string) => Promise<Session>;
+  createSession: (kind: 'chat' | 'image' | 'studio', title?: string) => Promise<Session>;
   patchSession: (id: number, data: { title?: string }) => Promise<void>;
   deleteSession: (id: number) => Promise<void>;
   refreshCurrent: () => Promise<void>;
@@ -57,7 +57,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const createSession = useCallback(async (kind: 'chat' | 'image', title?: string) => {
+  const createSession = useCallback(async (kind: 'chat' | 'image' | 'studio', title?: string) => {
     const session = await sessionApi.create(kind, title);
     setSessions((prev) => [session, ...prev]);
     setCurrentSession(session);

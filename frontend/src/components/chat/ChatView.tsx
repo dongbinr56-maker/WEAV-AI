@@ -27,6 +27,11 @@ export function ChatView() {
     );
   }
 
+  // WEAV Studio 세션은 ChatView에서 처리하지 않음
+  if (currentSession.kind === 'studio') {
+    return null;
+  }
+
   const isChat = currentSession.kind === 'chat';
   const messages = currentSession.messages ?? [];
   const responseCount = messages.filter((m) => m.role === 'assistant').length;

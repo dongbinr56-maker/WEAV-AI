@@ -1,4 +1,4 @@
-export type SessionKind = 'chat' | 'image';
+export type SessionKind = 'chat' | 'image' | 'studio';
 
 export interface Session {
   id: number;

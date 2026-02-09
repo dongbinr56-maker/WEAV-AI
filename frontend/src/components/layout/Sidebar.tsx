@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Image, ChevronDown, ChevronRight, Trash2, Pencil } from 'lucide-react';
+import { Image, ChevronDown, ChevronRight, Trash2, Pencil, Youtube } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import type { Session } from '@/types';
@@ -13,12 +13,14 @@ type ConfirmState = {
 
 type SidebarProps = {
   open: boolean;
+  onStudioClick?: () => void;
 };
 
-export function Sidebar({ open }: SidebarProps) {
+export function Sidebar({ open, onStudioClick }: SidebarProps) {
   const { sessions, currentSession, selectSession, createSession, patchSession, deleteSession } = useApp();
   const [chatExpanded, setChatExpanded] = useState(true);
   const [imageExpanded, setImageExpanded] = useState(true);
+  const [studioExpanded, setStudioExpanded] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -26,6 +28,7 @@ export function Sidebar({ open }: SidebarProps) {
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const chatSessions = sessions.filter((s) => s.kind === 'chat');
   const imageSessions = sessions.filter((s) => s.kind === 'image');
+  const studioSessions = sessions.filter((s) => s.kind === 'studio');
 
   useEffect(() => {
     if (editingId !== null) {
@@ -76,6 +79,19 @@ export function Sidebar({ open }: SidebarProps) {
     });
   };
 
+  const handleDeleteStudio = (e: React.MouseEvent, id: number) => {
+    e.stopPropagation();
+    setConfirmState({
+      open: true,
+      title: 'WEAV Studio 프로젝트 삭제',
+      message: '이 프로젝트를 삭제할까요?',
+      onConfirm: async () => {
+        await deleteSession(id);
+        setConfirmState(null);
+      },
+    });
+  };
+
   const startEdit = (e: React.MouseEvent, s: Session) => {
     e.stopPropagation();
     setEditingId(s.id);
@@ -106,22 +122,31 @@ export function Sidebar({ open }: SidebarProps) {
       } ${!open ? 'pointer-events-none' : ''}`}
       aria-hidden={!open}
     >
-        <div className="p-2 flex gap-2 shrink-0">
+        <div className="p-2 flex flex-col gap-2 shrink-0">
           <button
             ref={firstFocusableRef}
             type="button"
-            onClick={handleNewChat}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-muted hover:bg-accent text-sm font-medium transition-colors duration-200"
+            onClick={onStudioClick}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-muted hover:bg-accent text-sm font-medium transition-colors duration-200"
           >
-            <Pencil size={16} className="shrink-0" /> 새 채팅
+            <Youtube size={18} className="shrink-0" /> WEAV Studio
           </button>
-          <button
-            type="button"
-            onClick={handleNewImage}
-            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-muted hover:bg-accent text-sm font-medium transition-colors duration-200"
-          >
-            <Image size={16} className="shrink-0" /> 새 이미지
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleNewChat}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-muted hover:bg-accent text-sm font-medium transition-colors duration-200"
+            >
+              <Pencil size={16} className="shrink-0" /> 새 채팅
+            </button>
+            <button
+              type="button"
+              onClick={handleNewImage}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-muted hover:bg-accent text-sm font-medium transition-colors duration-200"
+            >
+              <Image size={16} className="shrink-0" /> 새 이미지
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto p-2 min-h-0">
           <div className="mb-4">
@@ -261,6 +286,80 @@ export function Sidebar({ open }: SidebarProps) {
                         className="p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:bg-destructive/20 text-muted-foreground hover:text-destructive shrink-0"
                         title="세션 삭제"
                         aria-label="세션 삭제"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+                </>
+                )}
+              </div>
+            </div>
+          </div>
+          <div>
+            <button
+              type="button"
+              onClick={() => setStudioExpanded((v) => !v)}
+              className="w-full flex items-center gap-2 text-sm font-medium text-foreground px-2 py-2 rounded-lg hover:bg-accent/50 transition-colors duration-200"
+            >
+              {studioExpanded ? <ChevronDown size={16} className="transition-transform duration-200" /> : <ChevronRight size={16} className="transition-transform duration-200" />}
+              WEAV Studio {studioSessions.length > 0 && <span className="text-muted-foreground">({studioSessions.length})</span>}
+            </button>
+            <div
+              className={`grid transition-[grid-template-rows] duration-200 ease-out ${studioExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
+            >
+              <div className="min-h-0 overflow-hidden">
+                {studioSessions.length === 0 ? (
+                  <p className="text-muted-foreground text-sm px-2 py-1">WEAV Studio 프로젝트가 없습니다.</p>
+                ) : (
+                <>
+                {studioSessions.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`group flex items-center gap-1 rounded-lg text-sm ${
+                      currentSession?.id === s.id ? 'bg-accent' : 'hover:bg-accent/50'
+                    } transition-colors duration-200`}
+                  >
+                    {editingId === s.id ? (
+                      <input
+                        ref={editingId === s.id ? inputRef : undefined}
+                        type="text"
+                        value={editingTitle}
+                        onChange={(e) => setEditingTitle(e.target.value)}
+                        onBlur={saveTitle}
+                        onKeyDown={handleTitleKeyDown}
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-background border border-border rounded transition-colors duration-200"
+                        placeholder="제목"
+                      />
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleSelect(s)}
+                          className="flex-1 min-w-0 text-left px-3 py-2 truncate"
+                        >
+                          {s.title || `Studio ${s.id}`}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => startEdit(e, s)}
+                          className="p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:bg-accent text-muted-foreground shrink-0"
+                          title="제목 변경"
+                          aria-label="제목 변경"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                      </>
+                    )}
+                    {editingId !== s.id && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteStudio(e, s.id)}
+                        className="p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:bg-destructive/20 text-muted-foreground hover:text-destructive shrink-0"
+                        title="프로젝트 삭제"
+                        aria-label="프로젝트 삭제"
                       >
                         <Trash2 size={14} />
                       </button>

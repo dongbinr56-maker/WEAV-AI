@@ -16,12 +16,12 @@ export const AppHeader = forwardRef<HTMLButtonElement, AppHeaderProps>(function 
         ref={ref}
         type="button"
         onClick={onMenuClick}
-        className="p-2 rounded hover:bg-accent text-white transition-colors duration-200"
+        className="p-2 rounded hover:bg-accent text-slate-900 transition-colors duration-200"
         aria-label={sidebarOpen ? '메뉴 닫기' : '메뉴 열기'}
         aria-expanded={sidebarOpen}
         title={sidebarOpen ? '메뉴 닫기' : '메뉴 열기'}
       >
-        <Menu size={24} />
+        <Menu size={26} strokeWidth={2.5} />
       </button>
       <span className="ml-3 font-semibold text-foreground">WEAV AI</span>
     </header>
