@@ -332,6 +332,64 @@ def merge_text_chunks_by_page(chunks, max_chars: int = 450, overlap_chars: int =
 
     return merged
 
+def extract_images_from_pdf(doc, session_id):
+    """
+    Extracts embedded images from PDF pages and uploads to MinIO.
+    Returns list of dicts.
+    """
+    extracted_images = []
+    if not minio_client:
+        return extracted_images
+
+    for page_num, page in enumerate(doc):
+        try:
+            image_list = page.get_images(full=True)
+            page_width = float(page.rect.width)
+            page_height = float(page.rect.height)
+
+            for img_idx, img in enumerate(image_list):
+                xref = img[0]
+                try:
+                    base_image = doc.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    image_ext = base_image["ext"]
+                    
+                    # Get location
+                    rects = page.get_image_rects(xref)
+                    if not rects:
+                        continue
+                    # Rect to list
+                    r = rects[0]
+                    bbox = [r.x0, r.y0, r.x1, r.y1]
+
+                    # Filter small icons/noise (e.g. < 50px)
+                    if (bbox[2] - bbox[0] < 50) or (bbox[3] - bbox[1] < 50):
+                        continue
+                    
+                    # Upload
+                    filename = f"images/{session_id}/{page_num+1}_{img_idx}.{image_ext}"
+                    file_obj = io.BytesIO(image_bytes)
+                    
+                    url = minio_client.upload_file(file_obj, filename, content_type=f"image/{image_ext}")
+                    
+                    extracted_images.append({
+                        'text': '', 
+                        'bbox': bbox,
+                        'page': page_num + 1,
+                        'source_type': 'image_ocr',
+                        'image_url': url,
+                        'page_width': page_width,
+                        'page_height': page_height,
+                        'is_image_ocr': True
+                    })
+                except Exception as e:
+                    logger.warning(f"Image extraction error on page {page_num}: {e}")
+                    continue
+        except Exception as e:
+             logger.error(f"Failed to get images from page {page_num}: {e}")
+
+    return extracted_images
+
 @shared_task(bind=True, max_retries=3)
 def process_pdf_document(self, document_id):
     tmp_path = None # Initialize tmp_path to ensure it's defined for os.unlink
@@ -381,6 +439,26 @@ def process_pdf_document(self, document_id):
         parsed_chunks = extract_text_and_bbox_with_pymupdf(pdf_doc)
         logger.info(f"Parsed {len(parsed_chunks)} text blocks.")
         
+        # A-2. Extract Images & OCR
+        image_chunks = extract_images_from_pdf(pdf_doc, doc_record.session_id)
+        logger.info(f"Extracted {len(image_chunks)} images.")
+        
+        chat_service = ChatMemoryService()
+        valid_image_chunks = []
+        for img in image_chunks:
+            # Call Fal.ai OCR
+            if img.get('image_url'):
+                extracted_text = chat_service.ocr_image_with_fal(img['image_url'])
+                if extracted_text and len(extracted_text.strip()) > 5:
+                    img['text'] = extracted_text.strip()
+                    img['source_type'] = 'image_ocr' # ensure type
+                    valid_image_chunks.append(img)
+        
+        
+        logger.info(f"OCR processed {len(valid_image_chunks)} images with text.")
+        # Do not merge image text with normal text to preserve image_url metadata
+        # parsed_chunks.extend(valid_image_chunks) 
+        
         # B. OCR Text + BBox
         ocr_chunks = extract_text_and_bbox_with_ocr(pdf_doc)
         logger.info(f"OCR extracted {len(ocr_chunks)} blocks.")
@@ -389,7 +467,9 @@ def process_pdf_document(self, document_id):
         final_chunks = merge_parsed_and_ocr(parsed_chunks, ocr_chunks)
         logger.info(f"Final merged chunks: {len(final_chunks)}")
         final_chunks = merge_text_chunks_by_page(final_chunks)
-        logger.info(f"Merged paragraph chunks: {len(final_chunks)}")
+        # Add image chunks as distinct items
+        final_chunks.extend(valid_image_chunks)
+        logger.info(f"Merged paragraph chunks + images: {len(final_chunks)}")
         
         if not final_chunks:
             # Fallback if both failed (e.g. empty scan without OCR setup)
@@ -424,7 +504,9 @@ def process_pdf_document(self, document_id):
                 'bbox_norm': bbox_norm,
                 'page_width': page_width,
                 'page_height': page_height,
-                'source_type': chunk.get('source_type', 'unknown')
+                'source_type': chunk.get('source_type', 'unknown'),
+                'image_url': chunk.get('image_url'),
+                'is_image_ocr': chunk.get('is_image_ocr', False)
             }
             
             service.add_memory(

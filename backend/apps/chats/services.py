@@ -4,6 +4,7 @@ import re
 import json
 from typing import Optional
 from openai import OpenAI
+import requests
 from pgvector.django import CosineDistance
 from django.conf import settings
 from django.db.models import Case, IntegerField, Value, When
@@ -53,6 +54,78 @@ class ChatMemoryService:
         except Exception as e:
             logger.error(f"Error generating embedding: {e}")
             return [0.0] * 1536
+
+    def ocr_image_with_fal(self, image_url: str) -> str:
+        """
+        Uses fal.ai Vision model (Llava-Next) to extract text from an image URL.
+        """
+        import time
+        api_key = getattr(settings, 'FAL_KEY', os.environ.get("FAL_KEY"))
+        if not api_key:
+            logger.warning("FAL_KEY not set. Skipping image OCR.")
+            return ""
+
+        # Attempt to use fal_client if available
+        try:
+            import fal_client
+            handler = fal_client.submit(
+                "fal-ai/llava-next",
+                arguments={
+                    "image_url": image_url,
+                    "prompt": "Extract all text from this image exactly as it appears. If there is no text, return an empty string.",
+                    "max_tokens": 1024
+                },
+            )
+            result = handler.get()
+            output = result.get('output', '')
+            # Sometimes output is a dict or list depending on model
+            if isinstance(output, list):
+                return " ".join([str(o) for o in output])
+            return str(output)
+        except ImportError:
+            # Fallback to direct HTTP request with polling (simplified)
+            # This is a bit risky due to complexity but necessary if fal_client is missing
+            try:
+                queue_url = "https://queue.fal.run/fal-ai/llava-next"
+                headers = {
+                    "Authorization": f"Key {api_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "image_url": image_url,
+                    "prompt": "Extract all text from this image exactly as it appears. If there is no text, return an empty string.",
+                    "max_tokens": 1024
+                }
+                
+                resp = requests.post(queue_url, headers=headers, json=payload, timeout=30)
+                if resp.status_code == 200:
+                    job = resp.json()
+                    request_id = job.get('request_id')
+                    if request_id:
+                        # Poll
+                        status_url = f"https://queue.fal.run/fal-ai/llava-next/requests/{request_id}/status"
+                        for _ in range(15): # 30s
+                            time.sleep(2)
+                            s_resp = requests.get(status_url, headers=headers, timeout=10)
+                            if s_resp.status_code == 200:
+                                s_data = s_resp.json()
+                                if s_data.get('status') == 'COMPLETED':
+                                    res_url = f"https://queue.fal.run/fal-ai/llava-next/requests/{request_id}"
+                                    r_resp = requests.get(res_url, headers=headers, timeout=10)
+                                    if r_resp.status_code == 200:
+                                        out = r_resp.json().get('output', '')
+                                        if isinstance(out, list):
+                                            return " ".join([str(o) for o in out])
+                                        return str(out)
+                                    break
+                                elif s_data.get('status') == 'FAILED':
+                                    break
+            except Exception as e:
+                logger.error(f"Fal.ai direct request failed: {e}")
+            return ""
+        except Exception as e:
+            logger.error(f"Fal.ai client extracted failed: {e}")
+            return ""
 
     def _tokenize_query(self, query: str) -> list[str]:
         if not query:
@@ -304,7 +377,9 @@ class ChatMemoryService:
                 "source": meta.get('filename', 'chat_history'),
                 "page": meta.get('page', 1),
                 "bbox": meta.get('bbox', []),
-                "type": meta.get('source', 'chat')
+                "type": meta.get('source', 'chat'),
+                "image_url": meta.get('image_url'), # Added for UI
+                "is_image_ocr": meta.get('is_image_ocr', False)
             }
             
             context_items.append(item)
