@@ -3,9 +3,13 @@ fal.ai HTTP API: openrouter/router (chat), imagen4 (Google), flux-pro v1.1-ultra
 참고: 00_docs/imagen4-preview.txt, 00_docs/flux-pro_v1.1-ultra.txt
 """
 import base64
-import os
+import re
 import logging
 import mimetypes
+import os
+import shutil
+import subprocess
+import tempfile
 from typing import Optional
 from urllib.parse import urlparse, urlunparse, unquote
 import ipaddress
@@ -131,6 +135,88 @@ def _fetch_image_from_minio_as_data_uri(url: str) -> Optional[str]:
         return None
     raw = minio_client.get_file_content(key)
     return _bytes_to_image_data_uri(raw, filename_hint=key)
+
+
+def _get_image_bytes(url: str) -> tuple[bytes, str]:
+    """이미지 URL에서 바이트와 content_type 반환. data URI, MinIO, ngrok 등 지원."""
+    if not url or not url.strip():
+        raise FALError('image url required')
+    url = url.strip()
+    if url.lower().startswith('data:'):
+        try:
+            header, b64 = url.split(',', 1)
+            ct = 'image/png'
+            if ';base64' in header:
+                mime = header.split(';')[0].replace('data:', '').strip()
+                if mime in ('image/png', 'image/jpeg', 'image/jpg', 'image/webp'):
+                    ct = mime
+            return base64.b64decode(b64), ct
+        except Exception as e:
+            raise FALError(f'Invalid data URI: {e}')
+    if minio_client:
+        key = _extract_storage_key_from_url(url)
+        if key:
+            raw = minio_client.get_file_content(key)
+            ext = (key.split('.')[-1] or 'png').lower()
+            ct = 'image/png' if ext in ('png', 'jpg', 'jpeg', 'webp') else mimetypes.guess_type(f'a.{ext}')[0] or 'image/png'
+            return raw, ct
+    headers = {'Ngrok-Skip-Browser-Warning': '1'} if _is_ngrok_url(url) else {}
+    r = requests.get(url, headers=headers, timeout=30)
+    r.raise_for_status()
+    ct = (r.headers.get('Content-Type') or 'image/png').split(';')[0].strip()
+    if ct not in ('image/png', 'image/jpeg', 'image/jpg', 'image/webp'):
+        ct = 'image/png'
+    return r.content, ct
+
+
+def _image_to_video_segment(img_url: str, duration_sec: float) -> str:
+    """
+    이미지를 지정 duration만큼 표시하는 짧은 비디오로 변환 후 fal 스토리지에 업로드.
+    fal compose는 이미지 URL의 duration을 무시하고 1프레임으로 처리하므로, 사전 변환이 필요함.
+    """
+    if not shutil.which('ffmpeg'):
+        raise FALError(
+            'ffmpeg is not installed. Install it to enable video export: '
+            'macOS: brew install ffmpeg, Ubuntu: apt install ffmpeg, Docker: add ffmpeg to your image.'
+        )
+    try:
+        import fal_client
+    except ImportError:
+        raise FALError('fal-client package required for image-to-video conversion (pip install fal-client)')
+    raw, content_type = _get_image_bytes(img_url)
+    ext = 'png' if 'png' in content_type else 'jpg' if 'jpeg' in content_type or 'jpg' in content_type else 'webp'
+    dur = max(0.1, min(600.0, float(duration_sec)))
+    tmp_in = None
+    tmp_out = None
+    try:
+        fd_in, tmp_in = tempfile.mkstemp(suffix=f'.{ext}')
+        os.write(fd_in, raw)
+        os.close(fd_in)
+        fd_out, tmp_out = tempfile.mkstemp(suffix='.mp4')
+        os.close(fd_out)
+        cmd = [
+            'ffmpeg', '-y',
+            '-loop', '1', '-i', tmp_in,
+            '-t', str(dur),
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', '30',
+            '-an',
+            tmp_out,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            logger.warning('ffmpeg stderr: %s', result.stderr[:500] if result.stderr else '')
+            raise FALError(f'FFmpeg image-to-video failed: {result.stderr[:300] if result.stderr else "unknown"}')
+        if not os.path.exists(tmp_out) or os.path.getsize(tmp_out) == 0:
+            raise FALError('FFmpeg produced empty video')
+        url = fal_client.upload_file(tmp_out)
+        return url
+    finally:
+        for p in (tmp_in, tmp_out):
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
 
 
 def _ensure_fal_reachable_image_url(url: str) -> str:
@@ -375,6 +461,72 @@ def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: st
 # MiniMax Speech 2.6 HD: Studio Step 5 TTS
 FAL_TTS_MINIMAX = 'fal-ai/minimax/speech-2.6-hd'
 
+# TTS 시 자연스러운 한국어 읽기: 숫자 → 관형형 (한, 두, 세, 열, 스무...)
+_ONES = ('', '한', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉')
+_TENS = ('', '열', '스물', '서른', '마흔', '쉰', '예순', '일흔', '여든', '아흔')
+
+
+def _build_native_1_99() -> dict[int, str]:
+    d: dict[int, str] = {}
+    for t in range(10):
+        for o in range(10):
+            n = t * 10 + o
+            if n == 0:
+                continue
+            if t == 0:
+                d[n] = _ONES[o]
+            elif t == 2 and o == 0:
+                d[20] = '스무'  # 스무 시, 스무 살, 스무 개
+            else:
+                tens = '열' if t == 1 else _TENS[t]
+                d[n] = tens + (_ONES[o] if o > 0 else '')
+    return d
+
+
+_NATIVE_1_99 = _build_native_1_99()
+
+
+def _normalize_korean_for_tts(text: str) -> str:
+    """
+    TTS가 한국어 숫자를 자연스럽게 읽도록 전처리.
+    - 10시 → 열 시, 3시 30분 → 세 시 삼십 분
+    - 10개 → 열 개, 5명 → 다섯 명, 3번 → 세 번, 20살 → 스무 살
+    """
+    if not text or not isinstance(text, str):
+        return text
+    result = text
+
+    def _repl_native(unit: str):
+        def _repl(m):
+            try:
+                n = int(m.group(1))
+                if 1 <= n <= 99 and n in _NATIVE_1_99:
+                    return f'{_NATIVE_1_99[n]} {unit}'
+            except (ValueError, KeyError):
+                pass
+            return m.group(0)
+        return _repl
+
+    # N시 (1~24만 시는 24시까지)
+    def _repl_hour(m):
+        try:
+            h = int(m.group(1))
+            if 1 <= h <= 24:
+                s = _NATIVE_1_99.get(h, str(h))
+                return f'{s} 시'
+        except (ValueError, KeyError):
+            pass
+        return m.group(0)
+
+    result = re.sub(r'(\d{1,2})\s*시', _repl_hour, result)
+
+    # N개, N명, N번, N번째, N살, N달, N마리, N장, N통, N곡, N편
+    for unit in ('개', '명', '번', '살', '달', '마리', '장', '통', '곡', '편'):
+        result = re.sub(rf'(\d{{1,2}})\s*{re.escape(unit)}', _repl_native(unit), result)
+    result = re.sub(r'(\d{1,2})\s*번째', _repl_native('번째'), result)
+
+    return result
+
 
 def tts_minimax(
     text: str,
@@ -387,8 +539,10 @@ def tts_minimax(
     Returns dict with 'url' (audio URL) and 'duration_ms'.
     voice_id: preset e.g. Wise_Woman, or custom_voice_id from voice-clone.
     """
+    raw = (text or '').strip()
+    normalized = _normalize_korean_for_tts(raw)
     payload = {
-        'prompt': (text or '').strip(),
+        'prompt': normalized,
         'output_format': output_format if output_format in ('url', 'hex') else 'url',
         'voice_setting': {
             'voice_id': voice_id,
@@ -435,14 +589,16 @@ def ffmpeg_compose_video(
         aud_url = (c.get('audio_url') or '').strip()
         if not img_url or not aud_url:
             raise FALError('Each clip must have image_url and audio_url')
+        # fal compose는 이미지 URL의 duration을 무시하고 1프레임으로 처리함. 이미지→비디오 변환 후 video URL 전달.
+        video_url = _image_to_video_segment(img_url, dur_sec)
         video_keyframes.append({
-            'timestamp': round(timestamp_ms),
-            'duration': round(dur_ms),
-            'url': img_url,
+            'timestamp': timestamp_ms,
+            'duration': dur_ms,
+            'url': video_url,
         })
         audio_keyframes.append({
-            'timestamp': round(timestamp_ms),
-            'duration': round(dur_ms),
+            'timestamp': timestamp_ms,
+            'duration': dur_ms,
             'url': aud_url,
         })
         timestamp_ms += dur_ms

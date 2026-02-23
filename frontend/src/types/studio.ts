@@ -107,4 +107,28 @@ export interface StudioGlobalContextType {
   setReferenceImage: React.Dispatch<React.SetStateAction<string>>;
   analyzedStylePrompt: string;
   setAnalyzedStylePrompt: React.Dispatch<React.SetStateAction<string>>;
+
+  // Step 7 메타데이터
+  metaTitle: string;
+  setMetaTitle: React.Dispatch<React.SetStateAction<string>>;
+  metaDescription: string;
+  setMetaDescription: React.Dispatch<React.SetStateAction<string>>;
+  metaPinnedComment: string;
+  setMetaPinnedComment: React.Dispatch<React.SetStateAction<string>>;
+
+  /** Step 6에서 생성된 영상 URL. 새로고침 후에도 유지. */
+  videoUrl: string | null;
+  setVideoUrl: React.Dispatch<React.SetStateAction<string | null>>;
+
+  // Step 8 썸네일
+  thumbnailData: {
+    thumbnails: Array<{ id: string; title: string; imagePlaceholder?: string; imageUrl?: string; ctrHint: string; isSelected: boolean }>;
+    ytUrlInput: string;
+    ytThumbnailUrl: string | null;
+  };
+  setThumbnailData: React.Dispatch<React.SetStateAction<{
+    thumbnails: Array<{ id: string; title: string; imagePlaceholder?: string; imageUrl?: string; ctrHint: string; isSelected: boolean }>;
+    ytUrlInput: string;
+    ytThumbnailUrl: string | null;
+  }>>;
 }

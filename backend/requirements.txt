@@ -4,6 +4,7 @@ psycopg2-binary
 python-decouple
 python-dotenv
 django-cors-headers
+django-ratelimit
 dj-database-url>=2.0
 requests
 pydantic>=2.5,<3

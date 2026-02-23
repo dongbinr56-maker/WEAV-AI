@@ -73,8 +73,9 @@ export interface StudioExportVideoOptions {
 /** Studio Step 6: 이미지+음성 클립을 합쳐 영상으로 내보내기 (fal ffmpeg compose). */
 export async function studioExportVideo(options: StudioExportVideoOptions): Promise<{ video_url?: string; thumbnail_url?: string }> {
   const { clips, aspect_ratio } = options;
-  return api.post<{ video_url?: string; thumbnail_url?: string }>(STUDIO_VIDEO, {
-    clips,
-    ...(aspect_ratio != null && { aspect_ratio }),
-  });
+  return api.post<{ video_url?: string; thumbnail_url?: string }>(
+    STUDIO_VIDEO,
+    { clips, ...(aspect_ratio != null && { aspect_ratio }) },
+    { timeoutMs: 600_000 }
+  );
 }

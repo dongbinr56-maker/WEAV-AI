@@ -8,6 +8,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { ChatView } from '@/components/chat/ChatView';
 import { StudioView } from '@/components/studio/StudioView';
 import { InputDialog } from '@/components/ui/InputDialog';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 
 
 function AppContentInner() {
@@ -85,12 +86,14 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AppProvider>
-      <ToastProvider>
-        <ChatProvider>
-          <AppContent />
-        </ChatProvider>
-      </ToastProvider>
-    </AppProvider>
+    <ErrorBoundary>
+      <AppProvider>
+        <ToastProvider>
+          <ChatProvider>
+            <AppContent />
+          </ChatProvider>
+        </ToastProvider>
+      </AppProvider>
+    </ErrorBoundary>
   );
 }
