@@ -7,4 +7,5 @@ urlpatterns = [
     path('studio/llm/', views.studio_llm),
     path('studio/image/', views.studio_image),
     path('studio/tts/', views.studio_tts),
+    path('studio/video/', views.studio_video),
 ]

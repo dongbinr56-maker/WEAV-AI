@@ -1,21 +1,26 @@
 
 import React, { useState, useEffect, useCallback, useRef, createContext, useContext, useMemo } from 'react';
-import {
-  X, History, Ghost, BookOpen, TrendingUp, Globe, MonitorPlay, ChevronRight, Flame, Loader2,
-  CheckCircle2, PlayCircle, Layers, Trash2, Link as LinkIcon, Sparkles, Target, Terminal,
-  Image as ImageIcon, Video, Wand2, Camera, Plus, Mic2, FileText, AlignLeft, Settings2,
-  Sliders, Music4, Activity, Smartphone, Monitor, PenTool, RefreshCcw, Utensils,
-  MessageCircle, Zap, Hash, Compass, Sword, Microscope, Palette, Map, Film, Heart, Gift,
-  Leaf, Smile, BarChart3, ChevronLeft, Box, CheckSquare, ImagePlus, ScanLine
+import { 
+  Search, X, Info, Rocket, History, Ghost, BookOpen, Lightbulb, 
+  TrendingUp, Globe, MonitorPlay, ChevronRight, Flame, Lock, 
+  Loader2, CheckCircle2, PlayCircle, Layers, Trash2, Link as LinkIcon,
+  Sparkles, Clock, LayoutDashboard, Target, Cpu, 
+  AlertTriangle, Terminal, ShieldCheck, Image as ImageIcon, Type,
+  Video, Wand2, Eye, MessageSquare, Camera, Plus, ChevronDown, ChevronUp,
+  Mic2, FileText, AlignLeft, Settings2, Sliders, ArrowUp, ArrowDown, Users,
+  Music4, Activity, Smartphone, Monitor, PenTool, Share2, RefreshCcw, Utensils,
+  MessageCircle, GripVertical, Zap, Hash, Compass, Sword, Microscope, Palette,
+  Map, Film, Church, Heart, FileUp, FileType, Star, Gift, Laptop, Leaf, Coffee, Smile,
+  BarChart3, Fingerprint, ClipboardCheck, Quote, ChevronLeft, Box, Boxes, Wand, UploadCloud, EyeOff, CheckSquare, Edit3, ImagePlus, ScanLine, Download
 } from 'lucide-react';
 import { StudioGlobalContextType, StudioScene, StudioScriptSegment, StudioAnalysisResult, StudioScriptPlanningData } from '@/types/studio';
 import { 
-  analyzeUrlPattern, generateTopics, generatePlanningStep, 
-  synthesizeMasterScript, splitScriptIntoScenes, generateSceneImage,
+  analyzeTopic, analyzeUrlPattern, generateTopics, generatePlanningStep, 
+  synthesizeMasterScript, splitScriptIntoScenes, sanitizeScriptSegment, generateSceneImage,
   analyzeReferenceImage, generateScenePrompt, generateMetaData, generateBenchmarkThumbnail
 } from '@/services/studio/geminiService';
-import { studioTts } from '@/services/studio/studioFalApi';
-import { fetchTrendingByCategory, formatTrendingGrowth, type TrendingItemWithCategory } from '@/services/studio/trendingApi';
+import { studioTts, studioExportVideo } from '@/services/studio/studioFalApi';
+import { fetchTrendingByCategory, formatTrendingGrowth, type TrendingItemWithCategory, type TrendTemplate } from '@/services/studio/trendingApi';
 
 // --- [전역 상태 관리] ---
 const GlobalContext = createContext<StudioGlobalContextType | undefined>(undefined);
@@ -62,11 +67,13 @@ const GlobalProvider: React.FC<{ children: React.ReactNode; sessionId?: number }
   });
 
   const [scenes, setScenes] = useState<StudioScene[]>(() => Array.isArray(stored?.scenes) && stored.scenes.length > 0 ? stored.scenes as StudioScene[] : []);
+  const [sceneDurations, setSceneDurations] = useState<number[]>([]);
   const [scriptSegments, setScriptSegments] = useState<StudioScriptSegment[]>([]);
   const [generatedTopics, setGeneratedTopics] = useState<string[]>(() => Array.isArray(stored?.generatedTopics) ? stored.generatedTopics : []);
   const [selectedTopic, setSelectedTopic] = useState(() => (typeof stored?.selectedTopic === 'string') ? stored.selectedTopic : '');
   const [referenceScript, setReferenceScript] = useState('');
   const [scriptStyle, setScriptStyle] = useState(() => (typeof stored?.scriptStyle === 'string') ? stored.scriptStyle : 'type-a');
+  const [customScriptStyleText, setCustomScriptStyleText] = useState(() => (typeof stored?.customScriptStyleText === 'string') ? stored.customScriptStyleText : '');
   const [scriptLength, setScriptLength] = useState(() => (typeof stored?.scriptLength === 'string') ? stored.scriptLength : 'short');
   const [planningData, setPlanningData] = useState<StudioScriptPlanningData>(() => {
     const def = { contentType: '', summary: '', opening: '', body: '', climax: '', outro: '', targetDuration: '1m' as string };
@@ -88,20 +95,20 @@ const GlobalProvider: React.FC<{ children: React.ReactNode; sessionId?: number }
   useEffect(() => {
     const data = {
       currentStep, activeTags, urlInput, videoFormat, inputMode,
-      descriptionInput, scenes, scriptStyle, scriptLength, planningData,
+      descriptionInput, scenes, scriptStyle, customScriptStyleText, scriptLength, planningData,
       selectedTopic, generatedTopics, masterScript, selectedStyle,
       referenceImage, analyzedStylePrompt
     };
     localStorage.setItem(storageKey, JSON.stringify(data));
-  }, [storageKey, currentStep, activeTags, urlInput, videoFormat, inputMode, descriptionInput, scenes, scriptStyle, scriptLength, planningData, selectedTopic, generatedTopics, masterScript, selectedStyle, referenceImage, analyzedStylePrompt]);
+  }, [storageKey, currentStep, activeTags, urlInput, videoFormat, inputMode, descriptionInput, scenes, scriptStyle, customScriptStyleText, scriptLength, planningData, selectedTopic, generatedTopics, masterScript, selectedStyle, referenceImage, analyzedStylePrompt]);
 
   const value = {
     currentStep, setCurrentStep, activeTags, setActiveTags, urlInput, setUrlInput, urlAnalysisData, setUrlAnalysisData,
     isLoading, setIsLoading, loadingMessage, setLoadingMessage, isDevMode, setIsDevMode, videoFormat, setVideoFormat,
     analysisResult, setAnalysisResult, inputMode, setInputMode, descriptionInput, setDescriptionInput,
-    scenes, setScenes, scriptSegments, setScriptSegments,
+    scenes, setScenes, sceneDurations, setSceneDurations, scriptSegments, setScriptSegments,
     generatedTopics, setGeneratedTopics, selectedTopic, setSelectedTopic, referenceScript, setReferenceScript,
-    scriptStyle, setScriptStyle, scriptLength, setScriptLength, planningData, setPlanningData,
+    scriptStyle, setScriptStyle, customScriptStyleText, setCustomScriptStyleText, scriptLength, setScriptLength, planningData, setPlanningData,
     isFileLoaded, setIsFileLoaded, masterScript, setMasterScript, selectedStyle, setSelectedStyle,
     referenceImage, setReferenceImage, analyzedStylePrompt, setAnalyzedStylePrompt
   };
@@ -223,6 +230,73 @@ const SectionHeader = ({
   </div>
 );
 
+// --- [사이드바] ---
+const Sidebar = ({ isOpen, toggleSidebar }: { isOpen: boolean, toggleSidebar: () => void }) => {
+  const { currentStep, setCurrentStep, isDevMode, setIsDevMode } = useGlobal();
+  const steps = [
+    { id: 1, name: '1. 기획 및 전략 분석', icon: <Target size={18}/> },
+    { id: 2, name: '2. 영상 주제 선정', icon: <Sparkles size={18}/> },
+    { id: 3, name: '3. 대본 구조 설계', icon: <PenTool size={18}/> },
+    { id: 4, name: '4. 이미지 및 대본 생성', icon: <ImageIcon size={18}/> },
+    { id: 5, name: '5. AI 음성 생성', icon: <Mic2 size={18}/> },
+    { id: 6, name: '6. AI 영상 생성', icon: <Video size={18}/> },
+    { id: 7, name: '7. 최적화 메타 설정', icon: <Monitor size={18}/> },
+    { id: 8, name: '8. 썸네일 연구소', icon: <ImageIcon size={18}/> }
+  ];
+
+  return (
+    <>
+      {isOpen && <div className="fixed inset-0 bg-black/40 z-[45] backdrop-blur-sm lg:hidden" onClick={toggleSidebar} />}
+      <aside className={`fixed lg:static inset-y-0 left-0 w-72 bg-white border-r border-slate-200 flex flex-col z-50 transition-all duration-300 shadow-2xl lg:shadow-none ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'} shrink-0`}>
+        <div className="h-32 px-12 border-b border-slate-100 flex items-center justify-center">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center">
+              <Zap size={18} fill="currentColor" className="text-yellow-400" />
+            </div>
+            <div className="flex flex-col">
+              <span className="ui-label">WEAV STUDIO</span>
+              <span className="font-serif text-lg text-slate-900">Creative Suite</span>
+            </div>
+          </div>
+        </div>
+
+        <nav className="flex-1 overflow-y-auto px-4 py-6 space-y-2 scrollbar-hide">
+          {steps.map(s => {
+            const isActive = currentStep === s.id;
+            const isLocked = !isDevMode && s.id > currentStep;
+            return (
+              <div
+                key={s.id}
+                className={`group flex items-center gap-7 px-12 py-6 cursor-pointer transition-all duration-500 relative ${isActive ? 'bg-slate-50/70' : isLocked ? 'opacity-20 cursor-not-allowed' : 'hover:bg-slate-50/40'}`}
+                onClick={() => !isLocked && (setCurrentStep(s.id), window.innerWidth < 1024 && toggleSidebar())}
+              >
+                <div className={`w-11 h-11 rounded-[1.2rem] flex items-center justify-center text-[13px] font-black border-2 transition-all duration-500 ${isActive ? 'bg-slate-900 border-slate-900 text-white shadow-xl rotate-6' : 'bg-white border-slate-200 text-slate-700 group-hover:text-slate-900'}`}>
+                  {isLocked ? <Lock size={12} /> : s.id}
+                </div>
+                <div className="flex-1 flex flex-col">
+                  <span className={`text-[14px] font-black uppercase tracking-tight transition-colors duration-300 ${isActive ? 'text-slate-900 italic' : 'text-slate-700 group-hover:text-slate-900'}`}>{s.name}</span>
+                  {isActive && <div className="h-[2.5px] w-full bg-rose-600 mt-1.5 animate-in slide-in-from-left duration-700 shadow-lg shadow-rose-200" />}
+                </div>
+                {isActive && <div className="absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-12 bg-rose-600 rounded-l-full shadow-xl shadow-rose-200" />}
+              </div>
+            );
+          })}
+        </nav>
+
+        <div className="p-12 border-t border-slate-100 flex items-center justify-between bg-slate-50/30">
+          <button onClick={() => setIsDevMode(!isDevMode)} className={`p-4 rounded-[1.2rem] transition-all duration-500 shadow-sm border ${isDevMode ? 'bg-slate-900 text-white border-slate-900 shadow-xl' : 'bg-white text-slate-700 border-slate-200 hover:text-slate-900'}`}>
+            <Terminal size={20} />
+          </button>
+          <div className="flex flex-col items-end">
+            <p className={`text-[10px] font-black uppercase tracking-widest leading-none ${isDevMode ? 'text-slate-900' : 'text-slate-700'}`}>Workspace Status</p>
+            <p className="text-[9px] text-slate-700 font-bold mt-2 tracking-tighter italic">V 1.2 PRO STABLE</p>
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+};
+
 // --- [Step 1: 기획 및 전략 분석] ---
 const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const { 
@@ -234,6 +308,7 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
   const [selectedBenchmarkPatterns, setSelectedBenchmarkPatterns] = useState<string[]>([]);
 
   const [templateMode, setTemplateMode] = useState<'mainstream' | 'niche'>('mainstream');
+  const [trendDisplayFilter, setTrendDisplayFilter] = useState<TrendTemplate>('all');
   const [trendPeriod, setTrendPeriod] = useState<'monthly' | 'weekly'>('monthly');
   const [trendDataRaw, setTrendDataRaw] = useState<TrendingItemWithCategory[] | null>(null);
   const [trendError, setTrendError] = useState<string | null>(null);
@@ -324,6 +399,26 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
     { id: '16:9', label: '가로형', sub: 'YouTube / Standard', icon: <Monitor size={16} /> }
   ];
 
+  const runTopicAnalysis = async () => {
+    const triggerValue = inputMode === 'tag' ? activeTags.join(', ') : descriptionInput.trim();
+    if (triggerValue.length < 2) return showToast("분석할 내용을 입력해주세요.");
+
+    setAnalysisResult(p => ({ ...p, isAnalyzing: true, error: null }));
+    try {
+      const res = await analyzeTopic(triggerValue, inputMode);
+      setAnalysisResult(prev => ({
+        ...prev,
+        isAnalyzing: false,
+        niche: res.niche,
+        trending: res.trending,
+        confidence: res.confidence
+      }));
+    } catch {
+      setAnalysisResult(p => ({ ...p, isAnalyzing: false, error: "분석 실패" }));
+      showToast("분석 엔진 호출 중 오류가 발생했습니다.");
+    }
+  };
+
   const runUrlAnalysis = async (url: string) => {
     const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be|youtube\.com\/shorts)\/.+$/;
     if (!ytRegex.test(url)) return showToast("유효한 유튜브 주소가 아닙니다.");
@@ -376,7 +471,7 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 1 / Strategy"
+        kicker="Step 1 / 기획"
         title="기획 분석"
         subtitle="아이디어를 정리하고, 시장과 콘텐츠 방향성을 빠르게 정교화합니다."
       />
@@ -419,8 +514,18 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
                 <div className="wf-subhead">
                   <span>시장 카테고리</span>
                   <div className="planner-toggle">
-                    <button onClick={() => setTemplateMode('mainstream')} className={`planner-toggle__item ${templateMode === 'mainstream' ? 'is-active' : ''}`}>인기</button>
-                    <button onClick={() => setTemplateMode('niche')} className={`planner-toggle__item ${templateMode === 'niche' ? 'is-active' : ''}`}>틈새</button>
+                    <button
+                      onClick={() => { setTemplateMode('mainstream'); setTrendDisplayFilter('mainstream'); }}
+                      className={`planner-toggle__item ${trendDisplayFilter === 'mainstream' ? 'is-active' : ''}`}
+                    >
+                      인기
+                    </button>
+                    <button
+                      onClick={() => { setTemplateMode('niche'); setTrendDisplayFilter('niche'); }}
+                      className={`planner-toggle__item ${trendDisplayFilter === 'niche' ? 'is-active' : ''}`}
+                    >
+                      틈새
+                    </button>
                   </div>
                 </div>
                 <div className="planner-chips">
@@ -517,9 +622,11 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
                 )}
               </div>
             )}
-            <button onClick={handleStartTopicGen} disabled={isTopicGenerating} className="wf-primary w-full mt-4">
-              {isTopicGenerating ? <><Loader2 size={16} className="animate-spin" /> 주제 생성 중...</> : <><Sparkles size={16} /> 주제 생성하기</>}
-            </button>
+            <div className="mt-4">
+              <button onClick={handleStartTopicGen} disabled={isTopicGenerating} className="wf-primary w-full">
+                {isTopicGenerating ? <><Loader2 size={16} className="animate-spin" /> 주제 생성 중...</> : <><Sparkles size={16} /> 주제 생성하기</>}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -528,7 +635,7 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
             <div className="wf-panel__header">
               <div className="flex items-center gap-2">
                 <TrendingUp size={16} />
-                <span className="wf-label">Trend Signals</span>
+                <span className="wf-label">실시간 트렌드</span>
               </div>
               <div className="planner-tabs">
                 <button onClick={() => setTrendPeriod('monthly')} className={`planner-tab ${trendPeriod === 'monthly' ? 'is-active' : ''}`}>월간</button>
@@ -586,7 +693,7 @@ const TopicGenerationStep = ({ showToast }: { showToast: (msg: string) => void }
   return (
     <div className="space-y-10 pb-24 max-w-[1000px] mx-auto">
       <SectionHeader
-        kicker="Step 2 / Topic"
+        kicker="Step 2 / 주제"
         title="주제 선택"
         subtitle="AI가 추천한 주제 중 하나를 선택하거나 직접 입력하세요."
       />
@@ -596,7 +703,7 @@ const TopicGenerationStep = ({ showToast }: { showToast: (msg: string) => void }
           <button
             key={idx}
             onClick={() => setSelectedTopic(topic)}
-            className={`topic-row w-full flex items-center justify-between px-6 py-5 text-left transition-colors ${selectedTopic === topic ? 'is-selected' : ''}`}
+            className={`topic-row w-full flex items-center justify-between px-6 py-5 text-left transition-colors first:rounded-t-2xl last:rounded-b-2xl ${selectedTopic === topic ? 'is-selected' : ''}`}
           >
             <div className="flex items-center gap-4">
               <span className={`ui-step__num ${selectedTopic === topic ? 'is-selected' : ''}`}>{(idx + 1).toString().padStart(2, '0')}</span>
@@ -632,7 +739,7 @@ const TopicGenerationStep = ({ showToast }: { showToast: (msg: string) => void }
 // --- [Step 3: 대본 아키텍처] ---
 const ScriptPlanningStep = () => {
   const { 
-    selectedTopic, scriptStyle, setScriptStyle, scriptLength,
+    selectedTopic, scriptStyle, setScriptStyle, customScriptStyleText, setCustomScriptStyleText, scriptLength,
     planningData, setPlanningData, setCurrentStep,
     masterScript, setMasterScript
   } = useGlobal();
@@ -667,9 +774,22 @@ const ScriptPlanningStep = () => {
     { id: '30s', label: '30초 (Short)', icon: <Flame size={14}/> },
     { id: '1m', label: '1분 (Standard)', icon: <Smartphone size={14}/> },
     { id: '3m', label: '3분 (Long)', icon: <MonitorPlay size={14}/> },
-    { id: '5m', label: '5분 (Deep)', icon: <Film size={14}/> },
     { id: 'custom', label: '직접 입력', icon: <PenTool size={14}/> }
   ];
+
+  /** 목표 길이 직접 입력 검증: 숫자+초(s) 또는 분(m), 1초~60분 */
+  const validateCustomDuration = (value: string): { valid: boolean; error?: string } => {
+    const v = value.trim().toLowerCase();
+    if (!v) return { valid: false, error: '값을 입력해 주세요.' };
+    if (!/^\d+[sm]$/.test(v)) return { valid: false, error: '형식: 숫자+초(s) 또는 분(m), 예: 90s, 2m' };
+    const num = parseInt(v, 10);
+    if (v.endsWith('s')) {
+      if (num < 1 || num > 3600) return { valid: false, error: '초(s)는 1~3600 사이로 입력해 주세요.' };
+    } else {
+      if (num < 1 || num > 60) return { valid: false, error: '분(m)은 1~60 사이로 입력해 주세요.' };
+    }
+    return { valid: true };
+  };
 
   const stepGuides: Record<string, string> = {
     contentType: "이 영상의 정체성을 정의합니다. 어떤 장르이며, 누구에게 어떤 가치를 주고자 하는지 명확히 하세요.",
@@ -683,7 +803,8 @@ const ScriptPlanningStep = () => {
   const runStepAI = async (key: string, name: string) => {
     setLoadingStepKey(key);
     try {
-      const res = await generatePlanningStep(name, { topic: selectedTopic, style: scriptStyle, length: scriptLength, planningData });
+      const styleForApi = scriptStyle === 'custom' ? (customScriptStyleText.trim() || '사용자 지정 스타일') : (archetypes.find(a => a.id === scriptStyle)?.name ?? scriptStyle);
+      const res = await generatePlanningStep(name, { topic: selectedTopic, style: styleForApi, length: scriptLength, planningData });
       setPlanningData(p => ({ ...p, [key]: res.result }));
     } finally {
       setLoadingStepKey(null);
@@ -697,8 +818,11 @@ const ScriptPlanningStep = () => {
         const { id, key, name } = steps[i];
         setActiveSubStep(id);
         setLoadingStepKey(key);
-        const res = await generatePlanningStep(name, { topic: selectedTopic, style: scriptStyle, length: scriptLength, planningData });
+        const styleForApi = scriptStyle === 'custom' ? (customScriptStyleText.trim() || '사용자 지정 스타일') : (archetypes.find(a => a.id === scriptStyle)?.name ?? scriptStyle);
+        const res = await generatePlanningStep(name, { topic: selectedTopic, style: styleForApi, length: scriptLength, planningData });
         setPlanningData(p => ({ ...p, [key]: res.result }));
+        setLoadingStepKey(null);
+        await new Promise(r => setTimeout(r, 1200));
       }
     } finally {
       setLoadingStepKey(null);
@@ -709,10 +833,13 @@ const ScriptPlanningStep = () => {
   const handleSynthesizeScript = async () => {
     setSynthesizeProgress('통합 시나리오 생성 중...');
     try {
+      const styleName = scriptStyle === 'custom'
+        ? (customScriptStyleText.trim() || '사용자 지정 스타일')
+        : (archetypes.find(a=>a.id===scriptStyle)?.name || 'Standard');
       const res = await synthesizeMasterScript({ 
         topic: selectedTopic, 
         planningData, 
-        style: archetypes.find(a=>a.id===scriptStyle)?.name || 'Standard' 
+        style: styleName
       });
       setMasterScript(res.master_script);
       setReviewMode('script');
@@ -750,7 +877,7 @@ const ScriptPlanningStep = () => {
 
             <div className="max-h-[55vh] overflow-y-auto scrollbar-hide pr-2">
               {reviewMode === 'architecture' ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4">
                   {steps.map(s => (
                     <div key={s.id} className="ui-card--muted space-y-2">
                       <div className="flex items-center justify-between">
@@ -797,7 +924,7 @@ const ScriptPlanningStep = () => {
       )}
 
       <SectionHeader
-        kicker="Step 3 / Script"
+        kicker="Step 3 / 구조"
         title="시나리오 구조 설계"
         subtitle="전개 구조와 문체를 정리하고, 핵심 메시지를 설계합니다."
       />
@@ -807,7 +934,7 @@ const ScriptPlanningStep = () => {
           <div className="ui-card space-y-4">
             <span className="ui-label">스타일 선택</span>
             <div className="space-y-2">
-              {archetypes.map(a => (
+              {archetypes.filter(a => a.id !== 'custom').map(a => (
                 <button
                   key={a.id}
                   onClick={() => setScriptStyle(a.id)}
@@ -820,22 +947,93 @@ const ScriptPlanningStep = () => {
                   </div>
                 </button>
               ))}
+              <button
+                onClick={() => setScriptStyle('custom')}
+                className={`style-choice w-full flex items-start gap-3 px-4 py-3 rounded-xl border transition-colors ${scriptStyle === 'custom' ? 'is-selected' : ''}`}
+              >
+                <div className="mt-0.5 style-choice__icon"><PenTool size={18} /></div>
+                <div className="text-left">
+                  <div className="style-choice__title">사용자 지정 스타일</div>
+                  <div className="style-choice__desc">고유의 개성을 담은 커스텀 디자인 문체</div>
+                </div>
+              </button>
             </div>
+            {scriptStyle === 'custom' && (
+              <div className="pt-1 space-y-1">
+                <input
+                  type="text"
+                  value={customScriptStyleText}
+                  onChange={e => setCustomScriptStyleText(e.target.value)}
+                  placeholder="예: 감성적인 1인칭 시점의 일상 브이로그 톤"
+                  className="ui-input w-full"
+                  aria-label="사용자 지정 스타일 입력"
+                />
+              </div>
+            )}
           </div>
 
           <div className="ui-card space-y-3">
-            <span className="ui-label">목표 길이</span>
-            <div className="flex flex-wrap gap-2">
-              {durations.map(d => (
-                <button
-                  key={d.id}
-                  onClick={() => setPlanningData(p => ({ ...p, targetDuration: d.id === 'custom' ? '' : d.id }))}
-                  className={`duration-pill ui-btn ${planningData.targetDuration === d.id || (d.id === 'custom' && !durations.some(x => x.id === planningData.targetDuration)) ? 'ui-btn--primary is-selected' : 'ui-btn--secondary'}`}
-                >
-                  {d.icon} {d.label}
-                </button>
-              ))}
+            <div className="flex items-center gap-1.5">
+              <span className="ui-label">목표 길이</span>
+              <span className="group/tip relative inline-flex">
+                <Info size={14} className="text-muted-foreground shrink-0 cursor-help" aria-hidden />
+                <span className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 z-10 ml-2 w-56 rounded-lg bg-slate-800 px-3 py-2 text-xs text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover/tip:opacity-100 whitespace-normal">
+                  대본·영상의 목표 재생 시간입니다. 선택한 길이에 맞춰 AI가 분량을 조절합니다. 다만 영상의 길이가 모델에 따라 조금 다를 수 있습니다.
+                </span>
+              </span>
             </div>
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap gap-2">
+                {durations.filter(d => d.id !== 'custom').map(d => (
+                  <button
+                    key={d.id}
+                    onClick={() => setPlanningData(p => ({ ...p, targetDuration: d.id }))}
+                    className={`duration-pill ui-btn ${planningData.targetDuration === d.id ? 'ui-btn--primary is-selected' : 'ui-btn--secondary'}`}
+                  >
+                    {d.icon} {d.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setPlanningData(p => ({ ...p, targetDuration: '' }))}
+                  className={`duration-pill ui-btn ${!planningData.targetDuration || !durations.some(x => x.id !== 'custom' && x.id === planningData.targetDuration) ? 'ui-btn--primary is-selected' : 'ui-btn--secondary'}`}
+                >
+                  <PenTool size={14} /> 직접 입력
+                </button>
+              </div>
+            </div>
+            {(() => {
+              const presetIds = durations.filter(d => d.id !== 'custom').map(d => d.id);
+              const isCustom = !planningData.targetDuration || !presetIds.includes(planningData.targetDuration);
+              if (!isCustom) return null;
+              const customValue = planningData.targetDuration;
+              const { valid, error } = validateCustomDuration(customValue);
+              const showError = customValue !== '' && !valid;
+              const handleCustomDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+                const v = e.target.value.toLowerCase().trim();
+                if (v === '' || /^\d+[sm]?$/.test(v)) setPlanningData(p => ({ ...p, targetDuration: v }));
+              };
+              return (
+                <div className="pt-1 space-y-1">
+                  <input
+                    type="text"
+                    value={planningData.targetDuration}
+                    onChange={handleCustomDurationChange}
+                    placeholder="예: 2m, 90s"
+                    className={`ui-input w-full max-w-[200px] ${showError ? 'border-red-500 focus:ring-red-500/30' : ''}`}
+                    aria-label="목표 길이 직접 입력"
+                    aria-invalid={showError}
+                    aria-describedby={showError ? 'target-duration-error' : undefined}
+                  />
+                  {showError && (
+                    <p id="target-duration-error" className="text-xs text-red-600" role="alert">
+                      {error}
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
 
@@ -926,7 +1124,8 @@ const ScriptPlanningStep = () => {
 const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const { 
     masterScript, scenes, setScenes, selectedStyle, setSelectedStyle, videoFormat,
-    referenceImage, setReferenceImage, analyzedStylePrompt, setAnalyzedStylePrompt
+    referenceImage, setReferenceImage, analyzedStylePrompt, setAnalyzedStylePrompt,
+    setCurrentStep
   } = useGlobal();
 
   const [isImgDragging, setIsImgDragging] = useState(false);
@@ -934,7 +1133,111 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
   const [isRefAnalyzing, setIsRefAnalyzing] = useState(false);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
   const [generateAllProgress, setGenerateAllProgress] = useState<string | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [enhancingPromptIndex, setEnhancingPromptIndex] = useState<number | null>(null);
+  const [expandedSceneImageUrl, setExpandedSceneImageUrl] = useState<string | null>(null);
+  const [isDownloadingImage, setIsDownloadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sceneImageInputRef = useRef<HTMLInputElement>(null);
+  const sceneImageUploadTargetRef = useRef<number | null>(null);
+
+  const handleSceneImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const idx = sceneImageUploadTargetRef.current;
+    if (!file || idx == null) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      if (dataUrl) setScenes(prev => prev.map((s, i) => i === idx ? { ...s, imageUrl: dataUrl } : s));
+    };
+    reader.readAsDataURL(file);
+    sceneImageUploadTargetRef.current = null;
+    e.target.value = '';
+  };
+
+  const handleDownloadExpandedImage = async () => {
+    if (!expandedSceneImageUrl) return;
+    setIsDownloadingImage(true);
+    try {
+      const res = await fetch(expandedSceneImageUrl, { mode: 'cors' });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `scene-image-${Date.now()}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('이미지가 다운로드되었습니다.');
+    } catch {
+      window.open(expandedSceneImageUrl, '_blank');
+      showToast('다운로드 대신 새 탭에서 열었습니다.');
+    } finally {
+      setIsDownloadingImage(false);
+    }
+  };
+
+  const handleEnhancePromptForScene = async (idx: number) => {
+    const scene = scenes[idx];
+    if (!scene?.narrative?.trim()) {
+      showToast('대본을 먼저 입력해 주세요.');
+      return;
+    }
+    setEnhancingPromptIndex(idx);
+    try {
+      const styleObj = styleLab.find(s => s.id === selectedStyle);
+      const prompt = await generateScenePrompt(scene.narrative, styleObj?.desc || '', analyzedStylePrompt);
+      const next = [...scenes];
+      next[idx].aiPrompt = prompt;
+      setScenes(next);
+      showToast('프롬프트가 향상되었습니다.');
+    } catch {
+      showToast('프롬프트 향상에 실패했습니다.');
+    } finally {
+      setEnhancingPromptIndex(null);
+    }
+  };
+
+  const handleSceneDragStart = (e: React.DragEvent, idx: number) => {
+    e.dataTransfer.setData('text/plain', String(idx));
+    e.dataTransfer.effectAllowed = 'move';
+    setDraggedIndex(idx);
+  };
+
+  const handleSceneDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverIndex(idx);
+  };
+
+  const handleSceneDragLeave = () => {
+    setDragOverIndex(null);
+  };
+
+  const handleSceneDrop = (e: React.DragEvent, dropIndex: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverIndex(null);
+    setDraggedIndex(null);
+    const dragIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
+    if (Number.isNaN(dragIndex) || dragIndex === dropIndex) return;
+    const newScenes = [...scenes];
+    const [removed] = newScenes.splice(dragIndex, 1);
+    newScenes.splice(dropIndex, 0, removed);
+    setScenes(newScenes);
+  };
+
+  const handleSceneDragEnd = () => {
+    setDragOverIndex(null);
+    setDraggedIndex(null);
+  };
+
+  useEffect(() => {
+    if (selectedStyle !== 'Custom') {
+      setReferenceImage('');
+      setAnalyzedStylePrompt('');
+    }
+  }, [selectedStyle, setReferenceImage, setAnalyzedStylePrompt]);
 
   const styleLab = [
     { 
@@ -1016,9 +1319,9 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
         cameraWork: 'Static',
         isPromptVisible: true,
         isSyncing: false,
-        isGenerating: false
+        isGenerating: false,
+        isManualAdd: false
       }));
-      setScenes(mapped);
 
       const styleObj = styleLab.find(s => s.id === selectedStyle);
       for (let i = 0; i < mapped.length; i++) {
@@ -1061,7 +1364,8 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
       cameraWork: 'Static',
       isPromptVisible: true,
       isSyncing: false,
-      isGenerating: false
+      isGenerating: false,
+      isManualAdd: true
     };
     setScenes([...scenes, newScene]);
     showToast("새 장면이 추가되었습니다.");
@@ -1070,20 +1374,20 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
   const handleGenImage = async (idx: number) => {
     const scene = scenes[idx];
     const styleObj = styleLab.find(s => s.id === selectedStyle);
-    const next = [...scenes];
-    next[idx].isGenerating = true;
-    setScenes(next);
+    setScenes(prev => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], isGenerating: true };
+      return next;
+    });
     try {
       const url = await generateSceneImage(scene.aiPrompt, selectedStyle, videoFormat as '9:16' | '16:9', styleObj?.model);
-      const updated = [...scenes];
-      updated[idx].imageUrl = url;
-      updated[idx].isGenerating = false;
-      setScenes(updated);
+      setScenes(prev => {
+        const next = prev.map((s, i) => i === idx ? { ...s, imageUrl: url, isGenerating: false } : s);
+        return next;
+      });
       showToast(`${idx+1}번 장면 비주얼 생성 완료.`);
     } catch (e) {
-      const reset = [...scenes];
-      reset[idx].isGenerating = false;
-      setScenes(reset);
+      setScenes(prev => prev.map((s, i) => i === idx ? { ...s, isGenerating: false } : s));
       showToast("생성 실패.");
     }
   };
@@ -1100,8 +1404,12 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
     showToast("모든 이미지를 순차적으로 생성합니다...");
     try {
       for (let i = 0; i < toGenerate.length; i++) {
+        const sceneIndex = toGenerate[i];
         setGenerateAllProgress(`(${i + 1}/${toGenerate.length})`);
-        await handleGenImage(toGenerate[i]);
+        await handleGenImage(sceneIndex);
+        setTimeout(() => {
+          document.getElementById(`scene-card-${sceneIndex}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 100);
       }
     } finally {
       setIsGeneratingAll(false);
@@ -1111,8 +1419,43 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
 
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
+      {expandedSceneImageUrl && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/90 flex items-center justify-center p-4"
+          onClick={() => setExpandedSceneImageUrl(null)}
+          role="presentation"
+        >
+          <div className="absolute right-4 top-4 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); handleDownloadExpandedImage(); }}
+              disabled={isDownloadingImage}
+              className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors disabled:opacity-60"
+              aria-label="다운로드"
+              title="다운로드"
+            >
+              {isDownloadingImage ? <Loader2 size={22} className="animate-spin" /> : <Download size={22} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpandedSceneImageUrl(null)}
+              className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+              aria-label="닫기"
+            >
+              <X size={24} />
+            </button>
+          </div>
+          <img
+            src={expandedSceneImageUrl}
+            alt="확대 보기"
+            className="max-w-[90vw] max-h-[90vh] w-auto h-auto object-contain rounded-lg shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+
       <SectionHeader
-        kicker="Step 4 / Visual"
+        kicker="Step 4 / 비주얼"
         title="이미지 및 대본 생성"
         subtitle="장면 단위로 시각적 연출과 프롬프트를 정리합니다."
         right={(
@@ -1149,53 +1492,79 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
             </div>
           </div>
 
-          <div className="ui-card space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="ui-label">레퍼런스</span>
-              <button onClick={() => fileInputRef.current?.click()} disabled={isRefAnalyzing} className="ui-btn ui-btn--secondary">
-                {isRefAnalyzing ? <><Loader2 size={14} className="animate-spin" /> 분석 중...</> : '업로드'}
-              </button>
-            </div>
-            <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && handleImgUpload(e.target.files[0])} accept="image/*" />
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              onDragOver={(e) => { e.preventDefault(); setIsImgDragging(true); }}
-              onDragLeave={() => setIsImgDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setIsImgDragging(false); if (e.dataTransfer.files[0]) handleImgUpload(e.dataTransfer.files[0]); }}
-              className={`aspect-square rounded-2xl border border-dashed flex items-center justify-center overflow-hidden cursor-pointer ${isImgDragging ? 'bg-primary/12 border-primary/45' : 'border-border/70 bg-secondary/45'}`}
-            >
-              {referenceImage ? (
-                <img src={referenceImage} className="w-full h-full object-cover" />
-              ) : (
-                <div className="text-center space-y-2 text-slate-500">
-                  <ImagePlus size={28} className="mx-auto" />
-                  <p className="text-sm">이미지를 드래그하거나 클릭하세요</p>
+          {selectedStyle === 'Custom' && (
+            <div className="ui-card space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="ui-label">레퍼런스</span>
+                <button onClick={() => fileInputRef.current?.click()} disabled={isRefAnalyzing} className="ui-btn ui-btn--secondary">
+                  {isRefAnalyzing ? <><Loader2 size={14} className="animate-spin" /> 분석 중...</> : '업로드'}
+                </button>
+              </div>
+              <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && handleImgUpload(e.target.files[0])} accept="image/*" />
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); setIsImgDragging(true); }}
+                onDragLeave={() => setIsImgDragging(false)}
+                onDrop={(e) => { e.preventDefault(); setIsImgDragging(false); if (e.dataTransfer.files[0]) handleImgUpload(e.dataTransfer.files[0]); }}
+                className={`aspect-square rounded-2xl border border-dashed flex items-center justify-center overflow-hidden cursor-pointer ${isImgDragging ? 'bg-primary/12 border-primary/45' : 'border-border/70 bg-secondary/45'}`}
+              >
+                {referenceImage ? (
+                  <img src={referenceImage} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="text-center space-y-2 text-slate-500">
+                    <ImagePlus size={28} className="mx-auto" />
+                    <p className="text-sm">이미지를 드래그하거나 클릭하세요</p>
+                  </div>
+                )}
+              </div>
+              {analyzedStylePrompt && (
+                <div className="ui-card--muted text-sm text-slate-700">
+                  {analyzedStylePrompt}
                 </div>
               )}
             </div>
-            {analyzedStylePrompt && (
-              <div className="ui-card--muted text-sm text-slate-700">
-                {analyzedStylePrompt}
-              </div>
-            )}
-          </div>
+          )}
         </div>
 
         <div className="col-span-12 lg:col-span-8 space-y-4">
           <div className="ui-card flex items-center justify-between">
-            <span className="ui-label">StudioScene Timeline</span>
+            <div className="flex flex-col gap-1">
+              <span className="ui-label">스튜디오장면 클립</span>
+              <span className="text-xs font-medium text-slate-500 tabular-nums">전체 대본 {masterScript.length.toLocaleString()}자 (공백 포함)</span>
+            </div>
             <button onClick={addManualStudioScene} className="ui-btn ui-btn--secondary">
               <Plus size={14} /> 씬 추가
             </button>
           </div>
 
           {scenes.length > 0 ? (
-            scenes.map((scene, idx) => (
-              <div key={scene.id} className="ui-card space-y-4">
+            <>
+            <div className="space-y-4">
+            {scenes.map((scene, idx) => (
+              <div
+                id={`scene-card-${idx}`}
+                key={scene.id}
+                draggable
+                onDragStart={(e) => {
+                  const target = e.target as HTMLElement;
+                  if (target.closest('button') || target.closest('textarea') || target.closest('input')) return;
+                  handleSceneDragStart(e, idx);
+                }}
+                onDragEnd={handleSceneDragEnd}
+                onDragOver={(e) => handleSceneDragOver(e, idx)}
+                onDragLeave={handleSceneDragLeave}
+                onDrop={(e) => handleSceneDrop(e, idx)}
+                className={`ui-card space-y-4 cursor-grab active:cursor-grabbing transition-all duration-200 ease-out hover:scale-[1.02] hover:shadow-lg
+                  ${draggedIndex === idx ? 'opacity-60 scale-[0.98] shadow-lg rotate-[-0.5deg] z-10' : ''}
+                  ${dragOverIndex === idx && draggedIndex !== idx ? 'ring-2 ring-rose-400 ring-offset-2 scale-[1.01] bg-rose-50/50' : ''}`}
+              >
                 <div className="flex items-center justify-between">
-                  <span className="ui-label">StudioScene {String(idx + 1).padStart(2, '0')}</span>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => setScenes(scenes.filter(s => s.id !== scene.id))} className="ui-btn ui-btn--ghost">
+                    <GripVertical size={18} className="text-slate-400 shrink-0" />
+                    <span className="ui-label">클립 {String(idx + 1).padStart(2, '0')}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={(e) => { e.stopPropagation(); setScenes(scenes.filter(s => s.id !== scene.id)); }} className="ui-btn ui-btn--ghost">
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -1204,7 +1573,12 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                   <div className="lg:col-span-2 space-y-4">
                     <div className="space-y-2">
-                      <span className="ui-label">대본</span>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="ui-label">대본</span>
+                        <span className="text-xs text-slate-500 tabular-nums">
+                          {(scene.narrative || '').length.toLocaleString()}자 (공백 포함)
+                        </span>
+                      </div>
                       <AutoResizeTextarea
                         value={scene.narrative}
                         onChange={v => { const n = [...scenes]; n[idx].narrative = v; setScenes(n); }}
@@ -1212,42 +1586,102 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
                         className="min-h-[120px] text-base font-semibold"
                       />
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-2 relative">
                       <span className="ui-label">프롬프트</span>
-                      <AutoResizeTextarea
-                        value={scene.aiPrompt}
-                        onChange={v => { const n = [...scenes]; n[idx].aiPrompt = v; setScenes(n); }}
-                        placeholder="장면 연출 설명을 입력하세요..."
-                        className="min-h-[140px] text-sm"
-                      />
+                      <div className="relative">
+                        <AutoResizeTextarea
+                          value={scene.aiPrompt}
+                          onChange={v => { const n = [...scenes]; n[idx].aiPrompt = v; setScenes(n); }}
+                          placeholder="장면 연출 설명을 입력하세요..."
+                          className={`min-h-[140px] text-sm ${scene.isManualAdd ? 'pr-28' : ''}`}
+                        />
+                        {scene.isManualAdd && (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); handleEnhancePromptForScene(idx); }}
+                            disabled={enhancingPromptIndex === idx}
+                            className="absolute right-2 bottom-2 rounded-lg bg-rose-100 hover:bg-rose-300 hover:text-rose-900 text-rose-700 flex items-center gap-1.5 px-2.5 py-1.5 shadow-sm transition-colors duration-150 disabled:opacity-60 text-xs font-medium"
+                            title="프롬프트 향상"
+                          >
+                            {enhancingPromptIndex === idx ? (
+                              <Loader2 size={14} className="animate-spin shrink-0" />
+                            ) : (
+                              <Sparkles size={14} className="shrink-0" />
+                            )}
+                            <span>프롬프트 향상</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
 
                   <div className="space-y-3">
-                    <div className="aspect-video rounded-2xl border border-dashed border-border/70 bg-secondary/45 flex items-center justify-center overflow-hidden relative">
+                    <div
+                      className={`aspect-video rounded-2xl border border-dashed border-border/70 bg-secondary/45 flex items-center justify-center overflow-hidden relative ${scene.imageUrl ? 'cursor-pointer hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 transition-shadow' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (scene.imageUrl) setExpandedSceneImageUrl(scene.imageUrl);
+                      }}
+                      role={scene.imageUrl ? 'button' : undefined}
+                      aria-label={scene.imageUrl ? '이미지 확대 보기' : undefined}
+                    >
                       {scene.isGenerating && (
                         <div className="absolute inset-0 bg-card/80 backdrop-blur-sm flex items-center justify-center">
                           <Loader2 size={20} className="animate-spin text-primary" />
                         </div>
                       )}
                       {scene.imageUrl ? (
-                        <img src={scene.imageUrl} alt={`StudioScene ${idx + 1}`} className="w-full h-full object-cover" />
+                        <img src={scene.imageUrl} alt={`StudioScene ${idx + 1}`} className="w-full h-full object-cover pointer-events-none" />
                       ) : (
                         <div className="text-center text-slate-500 text-sm">미리보기 없음</div>
                       )}
                     </div>
-                    <button onClick={() => handleGenImage(idx)} disabled={scene.isGenerating} className="ui-btn ui-btn--primary w-full">
-                      {scene.isGenerating ? <><Loader2 size={14} className="animate-spin" /> 생성 중...</> : <><Wand2 size={14} /> {styleLab.find(s => s.id === selectedStyle)?.name} 생성</>}
-                    </button>
+                    <div className="flex flex-col gap-2">
+                      <button onClick={() => handleGenImage(idx)} disabled={scene.isGenerating} className="ui-btn ui-btn--primary w-full flex items-center justify-center gap-2 min-w-0">
+                        {scene.isGenerating ? (
+                          <><Loader2 size={12} className="animate-spin shrink-0" /> 생성 중...</>
+                        ) : (
+                          <>
+                            <Wand2 size={14} className="shrink-0" />
+                            <span className="min-w-0 truncate" title={styleLab.find(s => s.id === selectedStyle)?.name + ' 생성'}>
+                              {selectedStyle === 'Custom' ? 'Custom' : selectedStyle === '3D' ? '3D 렌더링' : styleLab.find(s => s.id === selectedStyle)?.name} 생성
+                            </span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { sceneImageUploadTargetRef.current = idx; sceneImageInputRef.current?.click(); }}
+                        className="ui-btn ui-btn--secondary w-full flex items-center justify-center gap-2"
+                      >
+                        <ImagePlus size={14} /> 사진 업로드
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            ))
+            ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setCurrentStep(5)}
+              className="ui-btn ui-btn--primary w-full mt-6 flex items-center justify-center gap-2"
+            >
+              음성 생성 <ChevronRight size={18} />
+            </button>
+            </>
           ) : (
             <div className="ui-card--ghost ui-card--airy text-center text-slate-500">
               대본 분할 또는 씬 추가로 시작하세요.
             </div>
           )}
+          <input
+            type="file"
+            ref={sceneImageInputRef}
+            accept="image/*"
+            className="hidden"
+            onChange={handleSceneImageUpload}
+          />
         </div>
       </div>
     </div>
@@ -1256,7 +1690,7 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
 
 // --- [Step 5: 보이스 프리셋 (MiniMax voice_id)] ---
 const VOICE_PRESETS = [
-  { id: 'ko-female-1', voiceId: 'Wise_Woman', name: '한국어 여성 (밝은 톤)', sample: '안녕하세요. 오늘 영상도 재미있게 봐 주세요.' },
+  { id: 'ko-female-1', voiceId: 'Wise_Woman', name: '한국어 여성 (밝은 톤)', sample: '안녕하세요. 오늘 영상도 재미있게 봐 주세요.', sampleAudioUrl: '/voice-samples/ko-female-1.mp3' },
   { id: 'ko-female-2', voiceId: 'Young_Lady', name: '한국어 여성 (친근)', sample: '일상 브이로그나 리뷰에 잘 어울려요.' },
   { id: 'ko-male-1', voiceId: 'Wise_Man', name: '한국어 남성 (차분)', sample: '핵심만 간단히 전달하는 내러티브에 적합합니다.' },
   { id: 'ko-male-2', voiceId: 'Present_Male', name: '한국어 남성 (뉴스)', sample: '속보나 정보 전달형 콘텐츠에 추천합니다.' },
@@ -1307,13 +1741,41 @@ function getYoutubeThumbnailUrl(videoId: string): string {
   return `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
 }
 
-// --- [Step 5: AI 음성 합성] ---
-const VoiceStep = () => {
+/** 대본에서 내레이션만 추출 (음악/화면 지시문 제거). TTS 합성용 */
+function extractNarrationOnly(raw: string): string {
+  let text = (raw || '').trim();
+  if (!text) return text;
+
+  const narrationMarkers = ['**내레이션:**', '내레이션:'];
+  for (const marker of narrationMarkers) {
+    const idx = text.indexOf(marker);
+    if (idx !== -1) {
+      text = text.slice(idx + marker.length).trim();
+      break;
+    }
+  }
+
+  text = text
+    .replace(/\(화면\s*:\s*[^)]*\)/g, '')
+    .replace(/\(음악\s*:\s*[^)]*\)/g, '')
+    .replace(/^음악\s*:\s*[^\n]*\n?/gm, '')
+    .replace(/\n\s*\n/g, '\n')
+    .trim();
+
+  return text || raw.trim();
+}
+
+// --- [Step 5: AI 음성 생성] ---
+const VoiceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const context = useContext(GlobalContext);
   const scenes = context?.scenes ?? [];
+  const setScenes = context?.setScenes;
+  const setSceneDurations = context?.setSceneDurations;
+  const setCurrentStep = context?.setCurrentStep;
   const [selectedVoiceId, setSelectedVoiceId] = useState(VOICE_PRESETS[0].id);
   const [segments, setSegments] = useState<VoiceSegment[]>([]);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
+  const [synthesizingSegmentIndex, setSynthesizingSegmentIndex] = useState<number | null>(null);
   const [samplePlaying, setSamplePlaying] = useState(false);
 
   const selectedVoice = VOICE_PRESETS.find(v => v.id === selectedVoiceId);
@@ -1324,9 +1786,9 @@ const VoiceStep = () => {
         id: s.id,
         sceneIndex: i + 1,
         text: s.narrative || '(대사 없음)',
-        durationSec: 0,
-        status: 'pending' as const,
-        audioUrl: undefined,
+        durationSec: s.durationSec ?? 0,
+        status: s.audioUrl ? ('done' as const) : ('pending' as const),
+        audioUrl: s.audioUrl,
       })));
     else
       setSegments([]);
@@ -1336,24 +1798,62 @@ const VoiceStep = () => {
     const voiceId = selectedVoice?.voiceId ?? 'Wise_Woman';
     setIsSynthesizing(true);
     try {
+      // 결과를 배열에 모은 뒤 한 번에 setScenes/setSegments 호출 → Step 6에 durationSec이 모두 전달됨
+      const results: Array<{ url: string; durationSec: number } | null> = new Array(segments.length).fill(null);
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i];
-        const text = (seg.text || '').trim().replace(/^\(대사 없음\)$/, '');
-        if (!text) {
-          setSegments(prev => prev.map((p, j) => j === i ? { ...p, status: 'done' as const } : p));
-          continue;
-        }
+        const raw = (seg.text || '').trim().replace(/^\(대사 없음\)$/, '');
+        const text = extractNarrationOnly(raw);
+        if (!text) continue;
         try {
           const { url, duration_ms } = await studioTts({ text, voice_id: voiceId });
-          setSegments(prev => prev.map((p, j) =>
-            j === i ? { ...p, status: 'done' as const, audioUrl: url, durationSec: duration_ms / 1000 } : p
-          ));
+          results[i] = { url, durationSec: duration_ms / 1000 };
         } catch {
-          setSegments(prev => prev.map((p, j) => j === i ? { ...p, status: 'pending' as const } : p));
+          // 실패한 항목은 null 유지
         }
+        setTimeout(() => document.getElementById(`scene-card-${i}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
       }
+      setSegments(prev => prev.map((p, j) => {
+        const r = results[j];
+        if (r) return { ...p, status: 'done' as const, audioUrl: r.url, durationSec: r.durationSec };
+        if ((p.text || '').trim().replace(/^\(대사 없음\)$/, '') === '') return { ...p, status: 'done' as const };
+        return p;
+      }));
+      setScenes?.(prev => prev.map((s, j) => {
+        const r = results[j];
+        if (r) return { ...s, audioUrl: r.url, durationSec: r.durationSec };
+        return s;
+      }));
+      // Step 6에서 씬별 재생 길이를 확실히 쓰도록 별도 배열에 저장
+      setSceneDurations?.(results.map(r => (r ? r.durationSec : 5)));
     } finally {
       setIsSynthesizing(false);
+    }
+  };
+
+  const handleSynthesizeOne = async (idx: number) => {
+    const seg = segments[idx];
+    const raw = (seg?.text || '').trim().replace(/^\(대사 없음\)$/, '');
+    const text = extractNarrationOnly(raw);
+    if (!text) return;
+    const voiceId = selectedVoice?.voiceId ?? 'Wise_Woman';
+    setSynthesizingSegmentIndex(idx);
+    try {
+      const { url, duration_ms } = await studioTts({ text, voice_id: voiceId });
+      const durationSec = duration_ms / 1000;
+      setSegments(prev => prev.map((p, j) =>
+        j === idx ? { ...p, status: 'done' as const, audioUrl: url, durationSec } : p
+      ));
+      setScenes?.(prev => prev.map((s, j) => j === idx ? { ...s, audioUrl: url, durationSec } : s));
+      setSceneDurations?.(prev => {
+        const next = prev.length >= segments.length ? [...prev] : [...prev, ...Array(segments.length - prev.length).fill(5)];
+        next[idx] = durationSec;
+        return next;
+      });
+    } catch {
+      setSegments(prev => prev.map((p, j) => j === idx ? { ...p, status: 'pending' as const } : p));
+    } finally {
+      setSynthesizingSegmentIndex(null);
     }
   };
 
@@ -1366,7 +1866,9 @@ const VoiceStep = () => {
     if (!selectedVoice?.sample) return;
     setSamplePlaying(true);
     try {
-      const { url } = await studioTts({ text: selectedVoice.sample, voice_id: selectedVoice.voiceId });
+      const url = 'sampleAudioUrl' in selectedVoice && selectedVoice.sampleAudioUrl
+        ? selectedVoice.sampleAudioUrl
+        : (await studioTts({ text: selectedVoice.sample, voice_id: selectedVoice.voiceId })).url;
       playUrl(url);
     } catch {
       /* ignore */
@@ -1378,8 +1880,8 @@ const VoiceStep = () => {
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 5 / Voice"
-        title="AI 음성 합성"
+        kicker="Step 5 / 음성"
+        title="AI 음성 생성"
         subtitle="장면별 대본을 선택한 보이스로 합성합니다. 미리듣기 후 전체 내보내기를 진행하세요."
       />
 
@@ -1418,8 +1920,21 @@ const VoiceStep = () => {
         </div>
 
         <div className="col-span-12 lg:col-span-8 space-y-4">
-          <div className="ui-card flex items-center justify-between">
-            <span className="ui-label">장면별 음성 세그먼트</span>
+          <div className="ui-card flex items-center justify-between flex-wrap gap-2">
+            <div className="flex flex-col gap-1">
+              <span className="ui-label">장면별 음성 세그먼트</span>
+              {segments.length > 0 && (
+                <span className="text-xs font-medium text-slate-500 tabular-nums">
+                  전체 음성 시간{' '}
+                  {(() => {
+                    const totalSec = segments.reduce((a, s) => a + (s.durationSec ?? 0), 0);
+                    return totalSec >= 60
+                      ? `${Math.floor(totalSec / 60)}:${Math.floor(totalSec % 60).toString().padStart(2, '0')}`
+                      : `${totalSec.toFixed(1)}초`;
+                  })()}
+                </span>
+              )}
+            </div>
             <button
               onClick={handleSynthesizeAll}
               disabled={isSynthesizing || segments.length === 0}
@@ -1435,52 +1950,148 @@ const VoiceStep = () => {
                 Step 4에서 장면을 만든 뒤 여기로 오세요.
               </div>
             ) : (
-              segments.map((seg, idx) => (
-                <div key={seg.id} className="ui-card flex items-center gap-4">
-                  <span className="ui-step__num is-selected">{(idx + 1).toString().padStart(2, '0')}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">{seg.text}</p>
-                    <p className="text-xs text-slate-500">{seg.durationSec > 0 ? `${seg.durationSec.toFixed(1)}초` : '—'} · 씬 {seg.sceneIndex}</p>
+              segments.map((seg, idx) => {
+                const hasText = (seg.text || '').trim().replace(/^\(대사 없음\)$/, '').length > 0;
+                const isThisSynthesizing = synthesizingSegmentIndex === idx;
+                return (
+                  <div key={seg.id} className="ui-card flex items-center gap-4 flex-wrap">
+                    <span className="ui-step__num is-selected">{(idx + 1).toString().padStart(2, '0')}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{seg.text}</p>
+                      <p className="text-xs text-slate-500">{seg.durationSec > 0 ? `${seg.durationSec.toFixed(1)}초` : '—'} · 씬 {seg.sceneIndex}</p>
+                    </div>
+                    <span className="ui-pill">{seg.status === 'done' ? '완료' : '대기'}</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="ui-btn ui-btn--secondary"
+                        disabled={!hasText || isThisSynthesizing || isSynthesizing}
+                        onClick={() => handleSynthesizeOne(idx)}
+                      >
+                        {isThisSynthesizing ? <Loader2 size={14} className="animate-spin" /> : <Music4 size={14} />}
+                        생성
+                      </button>
+                      <button
+                        className={`ui-btn ui-btn--ghost ${seg.status !== 'done' || !seg.audioUrl ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        disabled={seg.status !== 'done' || !seg.audioUrl}
+                        onClick={() => seg.audioUrl && playUrl(seg.audioUrl)}
+                        title={seg.status !== 'done' ? '음성 생성 완료 후 재생할 수 있습니다.' : undefined}
+                      >
+                        <PlayCircle size={14} /> 재생
+                      </button>
+                    </div>
                   </div>
-                  <span className="ui-pill">{seg.status === 'done' ? '완료' : '대기'}</span>
-                  <button
-                    className="ui-btn ui-btn--ghost"
-                    disabled={!seg.audioUrl}
-                    onClick={() => seg.audioUrl && playUrl(seg.audioUrl)}
-                  >
-                    <PlayCircle size={14} /> 재생
-                  </button>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
+          {setCurrentStep && (
+            <button type="button" onClick={() => setCurrentStep(6)} className="ui-btn ui-btn--primary w-full flex items-center justify-center gap-2">
+              영상 생성 <ChevronRight size={18} />
+            </button>
+          )}
         </div>
       </div>
     </div>
   );
 };
 
-// --- [Step 6: AI 영상 생성] ---
-const VideoStep = () => {
-  const [timeline] = useState(MOCK_VIDEO_TIMELINE);
-  const [exportProgress, setExportProgress] = useState<number | null>(null);
+/** 초 단위를 "M:SS" 또는 "0:00" 형식으로 표시 */
+function formatTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
 
+// --- [Step 6: AI 영상 생성] ---
+const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
+  const context = useContext(GlobalContext);
+  const scenes = context?.scenes ?? [];
+  const sceneDurations = context?.sceneDurations ?? [];
+  const videoFormat = context?.videoFormat ?? '9:16';
+  const [isExporting, setIsExporting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [hoveredClipIndex, setHoveredClipIndex] = useState<number | null>(null);
+
+  const timeline = useMemo(() => {
+    let start = 0;
+    return scenes.map((s, i) => {
+      // Step 5에서 저장한 sceneDurations 우선 사용, 0/미설정이면 최소 1초
+      const raw = (sceneDurations[i] != null && sceneDurations[i] > 0) ? sceneDurations[i] : ((s.durationSec != null && s.durationSec > 0) ? s.durationSec : (s.duration ?? 5));
+      const duration = Math.max(1, raw);
+      const item = {
+        id: String(s.id),
+        label: `씬 ${i + 1}`,
+        duration,
+        startTime: start,
+        thumb: s.imageUrl || null,
+        audioUrl: s.audioUrl,
+        imageUrl: s.imageUrl,
+      };
+      start += duration;
+      return item;
+    });
+  }, [scenes, sceneDurations]);
   const totalDuration = timeline.reduce((acc, t) => acc + t.duration, 0);
 
-  const handleExport = () => {
-    setExportProgress(0);
-    const interval = setInterval(() => {
-      setExportProgress(p => {
-        if (p === null || p >= 100) { clearInterval(interval); return null; }
-        return p + 10;
+  const handleExport = async () => {
+    const hasAll = timeline.every(t => t.thumb && t.audioUrl);
+    if (!hasAll || timeline.length === 0) {
+      showToast('모든 씬에 이미지와 음성이 있어야 영상을 생성할 수 있습니다.');
+      return;
+    }
+    setExportError(null);
+    setVideoUrl(null);
+    setIsExporting(true);
+    try {
+      const result = await studioExportVideo({
+        clips: timeline.map(t => ({
+          image_url: t.imageUrl!,
+          audio_url: t.audioUrl!,
+          duration_sec: t.duration,
+        })),
+        aspect_ratio: videoFormat === '16:9' ? '16:9' : '9:16',
       });
-    }, 400);
+      if (result.video_url) {
+        setVideoUrl(result.video_url);
+        showToast('영상 생성이 완료되었습니다.');
+      } else {
+        showToast('영상 URL을 받지 못했습니다.');
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '영상 생성에 실패했습니다.';
+      setExportError(msg);
+      showToast(msg);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleDownloadVideo = async () => {
+    if (!videoUrl) return;
+    setIsDownloading(true);
+    try {
+      const res = await fetch(videoUrl, { mode: 'cors' });
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = 'weav-studio-video.mp4';
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+      showToast('다운로드가 시작되었습니다.');
+    } catch {
+      showToast('다운로드에 실패했습니다.');
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 6 / Video"
+        kicker="Step 6 / 영상"
         title="AI 영상 생성"
         subtitle="음성·이미지 타임라인을 합쳐 최종 영상으로 내보냅니다. 포맷에 맞춰 렌더링됩니다."
       />
@@ -1492,45 +2103,131 @@ const VideoStep = () => {
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="text-slate-600">포맷</span>
-                <span className="font-medium">9:16 (Shorts)</span>
+                <span className="font-medium">{videoFormat === '16:9' ? '16:9' : '9:16 (Shorts)'}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-600">총 길이</span>
-                <span className="font-medium">{totalDuration.toFixed(1)}초</span>
+                <span className="font-medium">{formatTime(totalDuration)} ({totalDuration.toFixed(1)}초)</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-slate-600">클립 수</span>
                 <span className="font-medium">{timeline.length}개</span>
               </div>
             </div>
-            <button onClick={handleExport} disabled={exportProgress !== null} className="ui-btn ui-btn--primary w-full">
-              {exportProgress !== null ? (
-                <><Loader2 size={14} className="animate-spin" /> 렌더링 중 {exportProgress}%</>
+            <button
+              onClick={handleExport}
+              disabled={isExporting || timeline.length === 0}
+              className="ui-btn ui-btn--primary w-full"
+            >
+              {isExporting ? (
+                <><Loader2 size={14} className="animate-spin" /> 렌더링 중...</>
               ) : (
-                <><Video size={14} /> 영상 내보내기 (목업)</>
+                <><Video size={14} /> 영상 생성</>
               )}
             </button>
+            {exportError && <p className="text-xs text-red-600">{exportError}</p>}
+            {videoUrl && (
+              <div className="flex flex-col gap-3 pt-2 border-t border-slate-200">
+                <span className="ui-label">생성된 영상</span>
+                <div className="rounded-xl overflow-hidden border border-slate-200 bg-black aspect-video max-h-[320px]">
+                  <video
+                    src={videoUrl}
+                    controls
+                    playsInline
+                    className="w-full h-full object-contain"
+                    preload="metadata"
+                  >
+                    이 브라우저는 비디오 재생을 지원하지 않습니다.
+                  </video>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleDownloadVideo}
+                    disabled={isDownloading}
+                    className="ui-btn ui-btn--secondary w-full text-sm"
+                  >
+                    {isDownloading ? <><Loader2 size={14} className="animate-spin" /> 다운로드 중...</> : <><Download size={14} /> 다운로드</>}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
         <div className="col-span-12 lg:col-span-8 space-y-4">
           <div className="ui-card">
-            <span className="ui-label">타임라인 (목업)</span>
-            <div className="flex gap-2 mt-3 overflow-x-auto pb-2">
-              {timeline.map((clip) => (
-                <div
-                  key={clip.id}
-                  className="flex-shrink-0 w-24 aspect-video rounded-xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center"
-                >
-                  <Film size={20} className="text-slate-400 mb-1" />
-                  <span className="text-xs font-medium text-slate-700">{clip.label}</span>
-                  <span className="text-[10px] text-slate-500">{clip.duration}s</span>
-                </div>
-              ))}
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <span className="ui-label">타임라인</span>
+              {timeline.length > 0 && (
+                <span className="text-xs font-medium text-slate-500 tabular-nums">
+                  총 {formatTime(totalDuration)}
+                </span>
+              )}
             </div>
+            {timeline.length === 0 ? (
+              <p className="text-sm text-slate-500">Step 4에서 장면을 만들고 Step 5에서 음성을 합성한 뒤 여기로 오세요.</p>
+            ) : (
+              <div className="flex gap-6">
+                {/* 왼쪽: 얇은 세로 비율 막대, 씬별로 갭으로 구분 */}
+                <div
+                  className="flex flex-col gap-1 flex-shrink-0 rounded-lg p-1 border border-slate-200 bg-slate-100"
+                  style={{ minHeight: '12rem', width: '0.875rem' }}
+                  title={`전체 ${formatTime(totalDuration)}`}
+                >
+                  {timeline.map((clip, idx) => (
+                    <div
+                      key={clip.id}
+                      className={`w-full rounded-md flex-shrink-0 transition-all duration-200 ${hoveredClipIndex === idx ? 'ring-2 ring-slate-900 ring-offset-1 ring-offset-slate-100 opacity-100 scale-105' : 'hover:opacity-90'}`}
+                      style={{
+                        flex: totalDuration > 0 ? clip.duration / totalDuration : 0,
+                        minHeight: 10,
+                        backgroundColor: clip.thumb && clip.audioUrl ? 'hsl(222, 47%, 11%)' : 'hsl(215, 16%, 47%)',
+                      }}
+                      title={`${clip.label} ${clip.duration.toFixed(1)}초`}
+                    />
+                  ))}
+                </div>
+                {/* 오른쪽: 클립 카드 목록 */}
+                <div className="flex-1 min-w-0 flex flex-col gap-4">
+                  {timeline.map((clip, idx) => (
+                    <div
+                      key={clip.id}
+                      onMouseEnter={() => setHoveredClipIndex(idx)}
+                      onMouseLeave={() => setHoveredClipIndex(null)}
+                      className="flex gap-5 rounded-2xl border border-slate-200 bg-white p-4 hover:border-slate-300 hover:shadow-sm transition-all"
+                    >
+                      <div className="w-36 flex-shrink-0 aspect-video rounded-xl overflow-hidden bg-slate-100">
+                        {clip.thumb ? (
+                          <img src={clip.thumb} alt={clip.label} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <Film size={28} className="text-slate-400" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0 flex flex-col justify-center gap-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-base font-semibold text-slate-900">{clip.label}</span>
+                          <span className="text-sm font-semibold text-slate-700 tabular-nums">{clip.duration.toFixed(1)}초</span>
+                        </div>
+                        <p className="text-sm text-slate-600 tabular-nums">
+                          <span className="font-medium">{formatTime(clip.startTime)}</span>
+                          <span className="text-slate-400 mx-1.5">→</span>
+                          <span className="font-medium">{formatTime(clip.startTime + clip.duration)}</span>
+                        </p>
+                        {(!clip.thumb || !clip.audioUrl) && (
+                          <span className="text-xs font-medium text-amber-600">이미지 또는 음성 없음</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          <div className="ui-card ui-card--muted text-sm text-slate-600">
-            실제 연동 시 음성 트랙과 씬 이미지가 타임라인에 배치된 뒤, 서버/로컬에서 영상으로 렌더링됩니다.
+          <div className="rounded-2xl border border-slate-200 bg-slate-50/60 px-4 py-3 text-sm text-slate-600 leading-relaxed">
+            위 타임라인은 각 씬의 시작·종료 시간과 비율을 보여줍니다. 영상 생성 버튼을 누르면 서버에서 이미지와 음성을 합쳐 최종 영상으로 렌더링합니다.
           </div>
         </div>
       </div>
@@ -1589,7 +2286,7 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 7 / Meta"
+        kicker="Step 7 / 메타데이터"
         title="메타데이터 AI 생성"
         subtitle="영상 제목, 설명(타임라인·해시태그 포함), 고정댓글을 AI가 자동으로 생성합니다. 생성 후 수정 가능합니다."
         right={
@@ -1734,7 +2431,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 8 / Thumbnail"
+        kicker="Step 8 / 썸네일"
         title="썸네일 연구소"
         subtitle="유튜브 URL로 썸네일을 불러온 뒤 벤치마킹하면, 같은 톤의 썸네일을 AI가 생성합니다."
       />
@@ -1844,6 +2541,17 @@ const AppContent = ({ projectName }: { projectName: string }) => {
     reader.readAsText(file);
   };
 
+  const stepTitles = [
+    '1. 기획 및 전략 분석',
+    '2. 영상 주제 선정',
+    '3. 대본 구조 설계',
+    '4. 이미지 및 대본 생성',
+    '5. AI 음성 생성',
+    '6. AI 영상 생성',
+    '7. 최적화 메타 설정',
+    '8. 썸네일 연구소'
+  ];
+
   const topSteps = [
     { id: 1, label: '기획', icon: <Target size={14}/> },
     { id: 2, label: '주제', icon: <Sparkles size={14}/> },
@@ -1858,10 +2566,20 @@ const AppContent = ({ projectName }: { projectName: string }) => {
   return (
     <div 
       className="ui-shell flex flex-1 text-foreground overflow-hidden font-sans relative"
-      onDragOver={(e) => { e.preventDefault(); setIsGlobalDragging(true); }}
-      onDragEnter={(e) => { e.preventDefault(); setIsGlobalDragging(true); }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (e.dataTransfer.types.includes('Files')) setIsGlobalDragging(true);
+      }}
+      onDragEnter={(e) => {
+        e.preventDefault();
+        if (e.dataTransfer.types.includes('Files')) setIsGlobalDragging(true);
+      }}
       onDragLeave={(e) => { if (e.relatedTarget === null) setIsGlobalDragging(false); }}
-      onDrop={(e) => { e.preventDefault(); setIsGlobalDragging(false); if (e.dataTransfer.files[0]) handleFileAction(e.dataTransfer.files[0]); }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setIsGlobalDragging(false);
+        if (e.dataTransfer.files?.[0]) handleFileAction(e.dataTransfer.files[0]);
+      }}
     >
       {isLoading && (
         <div className="absolute inset-0 z-[100] bg-background/82 backdrop-blur-sm flex flex-col items-center justify-center">
@@ -1915,8 +2633,8 @@ const AppContent = ({ projectName }: { projectName: string }) => {
           {currentStep === 2 && <TopicGenerationStep showToast={showToast} />}
           {currentStep === 3 && <ScriptPlanningStep />}
           {currentStep === 4 && <ImageAndScriptStep showToast={showToast} />}
-          {currentStep === 5 && <VoiceStep />}
-          {currentStep === 6 && <VideoStep />}
+          {currentStep === 5 && <VoiceStep showToast={showToast} />}
+          {currentStep === 6 && <VideoStep showToast={showToast} />}
           {currentStep === 7 && <MetaStep showToast={showToast} />}
           {currentStep === 8 && <ThumbnailStep showToast={showToast} />}
         </div>

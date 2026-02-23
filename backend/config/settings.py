@@ -107,8 +107,10 @@ REST_FRAMEWORK = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = DEBUG
+# DEBUG가 꺼져 있을 때(예: Docker) 프론트 오리진 허용. 기본값에 로컬 개발 주소 포함
+_DEFAULT_CORS_ORIGINS = 'http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001'
 if not DEBUG:
-    CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='', cast=Csv())
+    CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default=_DEFAULT_CORS_ORIGINS, cast=Csv())
 
 CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default=CELERY_BROKER_URL)

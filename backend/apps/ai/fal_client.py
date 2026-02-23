@@ -405,3 +405,96 @@ def tts_minimax(
     if not url:
         raise FALError(data.get('error', 'No audio URL'))
     return {'url': url, 'duration_ms': data.get('duration_ms', 0)}
+
+
+# fal FFmpeg Compose: 이미지+오디오 클립을 하나의 영상으로 합성
+FAL_FFMPEG_COMPOSE = 'fal-ai/ffmpeg-api/compose'
+
+
+def ffmpeg_compose_video(
+    clips: list[dict],
+    aspect_ratio: str = '9:16',
+) -> dict:
+    """
+    clips: list of { 'image_url': str, 'audio_url': str, 'duration_sec': float }
+    Returns: { 'video_url': str, 'thumbnail_url': str }
+    """
+    if not clips:
+        raise FALError('clips required')
+    timestamp_ms = 0.0
+    video_keyframes = []
+    audio_keyframes = []
+    for c in clips:
+        raw_dur = c.get('duration_sec', 5)
+        try:
+            dur_sec = float(raw_dur) if raw_dur is not None else 5.0
+        except (TypeError, ValueError):
+            dur_sec = 5.0
+        dur_ms = max(100.0, min(600000.0, dur_sec * 1000))  # 0.1초~600초
+        img_url = (c.get('image_url') or '').strip()
+        aud_url = (c.get('audio_url') or '').strip()
+        if not img_url or not aud_url:
+            raise FALError('Each clip must have image_url and audio_url')
+        video_keyframes.append({
+            'timestamp': round(timestamp_ms),
+            'duration': round(dur_ms),
+            'url': img_url,
+        })
+        audio_keyframes.append({
+            'timestamp': round(timestamp_ms),
+            'duration': round(dur_ms),
+            'url': aud_url,
+        })
+        timestamp_ms += dur_ms
+    # fal expects keyframes in timestamp order; use integers (ms)
+    video_keyframes.sort(key=lambda k: k['timestamp'])
+    audio_keyframes.sort(key=lambda k: k['timestamp'])
+    # fal-ai/ffmpeg-api/compose expects body.tracks at top level (not body.input.tracks)
+    body = {
+        'tracks': [
+            {'id': 'video', 'type': 'video', 'keyframes': video_keyframes},
+            {'id': 'audio', 'type': 'audio', 'keyframes': audio_keyframes},
+        ],
+    }
+    try:
+        r = requests.post(
+            f'{FAL_BASE}/{FAL_FFMPEG_COMPOSE}',
+            headers=_fal_headers(),
+            json=body,
+            timeout=300,
+        )
+    except requests.RequestException as e:
+        raise FALError(f'fal compose request failed: {e}') from e
+
+    if r.status_code == 422:
+        try:
+            err_body = r.json()
+            if isinstance(err_body, dict):
+                detail = err_body.get('detail') or err_body.get('message') or err_body.get('error')
+                if detail is not None:
+                    err = detail if isinstance(detail, str) else str(detail)[:400]
+                else:
+                    err = str(err_body)[:400]
+            else:
+                err = str(err_body)[:400]
+        except Exception:
+            err = (r.text[:400] if r.text else 'unknown')
+        raise FALError(f'fal compose 422: {err}')
+
+    try:
+        r.raise_for_status()
+    except requests.HTTPError as e:
+        raise FALError(f'fal compose error {r.status_code}: {e.response.text[:300] if e.response and e.response.text else str(e)}') from e
+
+    try:
+        data = r.json()
+    except Exception as e:
+        raise FALError(f'Invalid response from fal: {e}')
+    if not isinstance(data, dict):
+        raise FALError('Unexpected response format from fal')
+    out = data.get('data') or data
+    video_url = (out.get('video_url') or '').strip() if isinstance(out, dict) else ''
+    thumbnail_url = (out.get('thumbnail_url') or '').strip() if isinstance(out, dict) else ''
+    if not video_url:
+        raise FALError(out.get('error', 'No video_url in response') if isinstance(out, dict) else 'No video_url in response')
+    return {'video_url': video_url, 'thumbnail_url': thumbnail_url}

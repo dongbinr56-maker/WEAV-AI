@@ -136,7 +136,8 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2 min-h-0 relative z-10">
-          <div className="mb-4">
+          <div className="flex flex-col gap-4">
+          <div>
             <button
               type="button"
               onClick={() => setChatExpanded((v) => !v)}
@@ -287,6 +288,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                 )}
               </div>
             </div>
+          </div>
           </div>
         </div>
       </aside>
