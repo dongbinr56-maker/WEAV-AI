@@ -1,11 +1,28 @@
 #!/bin/sh
 
-# This is a placeholder for a script that would wait for the DB to be ready
-# In a real-world scenario, you would use a tool like docker-compose-wait or a custom script
-# to check for the DB connection before proceeding.
 echo "Waiting for database..."
-# For now, we'll just sleep for a few seconds
-sleep 5
+max=30
+i=0
+while [ $i -lt $max ]; do
+  if python -c "
+import os
+import django
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+django.setup()
+from django.db import connection
+connection.ensure_connection()
+" 2>/dev/null; then
+    echo "Database is ready."
+    break
+  fi
+  i=$((i + 1))
+  echo "Waiting for database... ($i/$max)"
+  sleep 2
+done
+if [ $i -eq $max ]; then
+  echo "Database wait timed out."
+  exit 1
+fi
 
 echo "Applying database migrations..."
 python manage.py migrate
@@ -14,4 +31,4 @@ echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
 echo "Starting Gunicorn..."
-gunicorn config.wsgi:application --bind 0.0.0.0:8000
+gunicorn config.wsgi:application --bind 0.0.0.0:8000 --timeout 600

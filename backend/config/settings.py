@@ -5,8 +5,13 @@ Django settings for WEAV AI.
 from pathlib import Path
 from decouple import config, Csv
 import os
+import sys
+
+from django.core.exceptions import ImproperlyConfigured
 
 from dotenv import load_dotenv
+
+TESTING = 'test' in sys.argv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,8 +26,14 @@ def _bool(val):
         return False
     return False
 
-SECRET_KEY = config('SECRET_KEY', default='change-me-in-production')
+_RAW_SECRET_KEY = config('SECRET_KEY', default='change-me-in-production')
+SECRET_KEY = _RAW_SECRET_KEY
 DEBUG = _bool(config('DEBUG', default=True))
+if not DEBUG and not TESTING and SECRET_KEY == 'change-me-in-production':
+    raise ImproperlyConfigured(
+        'SECRET_KEY must be set to a secure value in production. '
+        'Set SECRET_KEY in your environment or .env file.'
+    )
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1,api', cast=Csv())
 
 AUTH_USER_MODEL = 'users.User'
@@ -114,6 +125,20 @@ if not DEBUG:
 
 CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', default=CELERY_BROKER_URL)
+
+# Cache for django-ratelimit (Studio API). Use Redis if available.
+_broker = CELERY_BROKER_URL or ''
+if _broker.startswith('redis://'):
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+            'LOCATION': _broker.replace('/0', '/1'),  # DB 1 for cache
+        }
+    }
+else:
+    CACHES = {
+        'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}
+    }
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -122,9 +147,13 @@ FAL_KEY = config('FAL_KEY', default='')
 
 # MinIO Settings
 MINIO_ENDPOINT = config('MINIO_ENDPOINT', default='localhost:9000')
-# Default values aligned with infra/docker-compose.yml
+# Default values aligned with infra/docker-compose.yml. Production: set MINIO_ACCESS_KEY, MINIO_SECRET_KEY explicitly.
 MINIO_ACCESS_KEY = config('MINIO_ACCESS_KEY', default='weavai_admin')
 MINIO_SECRET_KEY = config('MINIO_SECRET_KEY', default='minio123')
+if not DEBUG and not TESTING and MINIO_SECRET_KEY == 'minio123':
+    raise ImproperlyConfigured(
+        'MINIO_SECRET_KEY must be changed in production. Set MINIO_SECRET_KEY (or MINIO_ROOT_PASSWORD in docker-compose) to a strong value.'
+    )
 MINIO_BUCKET_NAME = config('MINIO_BUCKET_NAME', default='weav-ai')
 MINIO_USE_SSL = _bool(config('MINIO_USE_SSL', default=False))
 MINIO_PUBLIC_ENDPOINT = config('MINIO_PUBLIC_ENDPOINT', default=MINIO_ENDPOINT)

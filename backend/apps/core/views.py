@@ -4,9 +4,26 @@ import logging
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt
+from django_ratelimit.decorators import ratelimit
 from decouple import config
 
 logger = logging.getLogger(__name__)
+
+# Studio API 입력 제한 (비용·리소스 보호)
+STUDIO_LLM_PROMPT_MAX = 100_000
+STUDIO_LLM_SYSTEM_MAX = 50_000
+STUDIO_IMAGE_PROMPT_MAX = 10_000
+STUDIO_TTS_TEXT_MAX = 5_000
+
+# SPA에서 쿠키 기반 세션 미사용 시 csrf_exempt 필요. 인증 추가 시 CSRF 토큰 처리로 전환 권장.
+
+def _check_ratelimit(request):
+    """django-ratelimit block=False 사용 시, 제한 초과 시 429 반환."""
+    if getattr(request, 'limited', False):
+        return JsonResponse(
+            {'error': '요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.'}, status=429
+        )
+    return None
 
 
 def health(request):
@@ -204,9 +221,12 @@ def _parse_json_body(request):
 
 
 @csrf_exempt
+@ratelimit(key='ip', rate='30/m', method='POST', block=False)
 @require_http_methods(['POST'])
 def studio_llm(request):
     """Studio Step 2~4 LLM. POST JSON: { prompt, system_prompt?, model? } -> { output }."""
+    if (r := _check_ratelimit(request)):
+        return r
     body = _parse_json_body(request)
     if not body or not isinstance(body.get('prompt'), str):
         return JsonResponse({'error': 'prompt (string) required'}, status=400)
@@ -219,9 +239,13 @@ def studio_llm(request):
     prompt = (body.get('prompt') or '').strip()
     if not prompt:
         return JsonResponse({'error': 'prompt required'}, status=400)
+    if len(prompt) > STUDIO_LLM_PROMPT_MAX:
+        return JsonResponse({'error': f'prompt는 {STUDIO_LLM_PROMPT_MAX}자 이내로 입력해 주세요.'}, status=400)
     system_prompt = body.get('system_prompt') or None
     if system_prompt is not None and not isinstance(system_prompt, str):
         system_prompt = None
+    if system_prompt and len(system_prompt) > STUDIO_LLM_SYSTEM_MAX:
+        return JsonResponse({'error': f'system_prompt는 {STUDIO_LLM_SYSTEM_MAX}자 이내로 입력해 주세요.'}, status=400)
     model = body.get('model') or 'google/gemini-2.5-flash'
     try:
         output = chat_completion(prompt, model=model, system_prompt=system_prompt)
@@ -234,9 +258,12 @@ def studio_llm(request):
 
 
 @csrf_exempt
+@ratelimit(key='ip', rate='15/m', method='POST', block=False)
 @require_http_methods(['POST'])
 def studio_image(request):
     """Studio scene image. POST JSON: { prompt, model?, aspect_ratio?, num_images? } -> { images }."""
+    if (r := _check_ratelimit(request)):
+        return r
     body = _parse_json_body(request)
     if not body or not isinstance(body.get('prompt'), str):
         return JsonResponse({'error': 'prompt (string) required'}, status=400)
@@ -249,6 +276,8 @@ def studio_image(request):
     prompt = (body.get('prompt') or '').strip()
     if not prompt:
         return JsonResponse({'error': 'prompt required'}, status=400)
+    if len(prompt) > STUDIO_IMAGE_PROMPT_MAX:
+        return JsonResponse({'error': f'prompt는 {STUDIO_IMAGE_PROMPT_MAX}자 이내로 입력해 주세요.'}, status=400)
     model = body.get('model') or 'fal-ai/imagen4/preview'
     aspect_ratio = body.get('aspect_ratio') or '16:9'
     num_images = max(1, min(4, int(body.get('num_images', 1))))
@@ -268,9 +297,12 @@ def studio_image(request):
 
 
 @csrf_exempt
+@ratelimit(key='ip', rate='60/m', method='POST', block=False)
 @require_http_methods(['POST'])
 def studio_tts(request):
     """Studio Step 5 TTS. POST JSON: { text, voice_id? } -> { url, duration_ms }."""
+    if (r := _check_ratelimit(request)):
+        return r
     body = _parse_json_body(request)
     if not body or not isinstance(body.get('text'), str):
         return JsonResponse({'error': 'text (string) required'}, status=400)
@@ -283,6 +315,8 @@ def studio_tts(request):
     text = (body.get('text') or '').strip()
     if not text:
         return JsonResponse({'error': 'text required'}, status=400)
+    if len(text) > STUDIO_TTS_TEXT_MAX:
+        return JsonResponse({'error': f'text는 {STUDIO_TTS_TEXT_MAX}자 이내로 입력해 주세요.'}, status=400)
     voice_id = body.get('voice_id') or 'Wise_Woman'
     speed = body.get('speed')
     if speed is not None:
@@ -303,9 +337,12 @@ def studio_tts(request):
 
 
 @csrf_exempt
+@ratelimit(key='ip', rate='10/m', method='POST', block=False)
 @require_http_methods(['POST'])
 def studio_video(request):
     """Studio Step 6 영상 합성. POST JSON: { clips: [{ image_url, audio_url, duration_sec }], aspect_ratio? } -> { video_url, thumbnail_url? }."""
+    if (r := _check_ratelimit(request)):
+        return r
     body = _parse_json_body(request)
     if not body or not isinstance(body.get('clips'), list):
         return JsonResponse({'error': 'clips (array) required'}, status=400)

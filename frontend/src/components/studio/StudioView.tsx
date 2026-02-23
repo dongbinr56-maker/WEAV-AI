@@ -43,7 +43,13 @@ const GlobalProvider: React.FC<{ children: React.ReactNode; sessionId?: number }
   const [currentStep, setCurrentStep] = useState<number>(() => (stored && typeof stored.currentStep === 'number') ? stored.currentStep : 1);
   const [activeTags, setActiveTags] = useState<string[]>(() => Array.isArray(stored?.activeTags) ? stored.activeTags : []);
   const [urlInput, setUrlInput] = useState(() => (typeof stored?.urlInput === 'string') ? stored.urlInput : '');
-  const [urlAnalysisData, setUrlAnalysisData] = useState<any>(null);
+  const [urlAnalysisData, setUrlAnalysisData] = useState<any>(() => {
+    const d = stored?.urlAnalysisData as { summary?: string; patterns?: string[] } | undefined;
+    if (d && typeof d === 'object' && (d.summary != null || Array.isArray(d.patterns))) {
+      return { summary: d.summary ?? '', patterns: Array.isArray(d.patterns) ? d.patterns : [] };
+    }
+    return null;
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
   const [isDevMode, setIsDevMode] = useState(false);
@@ -92,15 +98,44 @@ const GlobalProvider: React.FC<{ children: React.ReactNode; sessionId?: number }
     return def;
   });
 
+  // Step 7 메타데이터 (localStorage 저장)
+  const [metaTitle, setMetaTitle] = useState(() => (typeof stored?.metaTitle === 'string') ? stored.metaTitle : '');
+  const [metaDescription, setMetaDescription] = useState(() => (typeof stored?.metaDescription === 'string') ? stored.metaDescription : '');
+  const [metaPinnedComment, setMetaPinnedComment] = useState(() => (typeof stored?.metaPinnedComment === 'string') ? stored.metaPinnedComment : '');
+
+  // Step 6 생성된 영상 URL (localStorage 저장)
+  const [videoUrl, setVideoUrl] = useState<string | null>(() => (typeof stored?.videoUrl === 'string' && stored.videoUrl) ? stored.videoUrl : null);
+
+  // Step 8 썸네일 (localStorage 저장)
+  const [thumbnailData, setThumbnailData] = useState<{ thumbnails: Array<{ id: string; title: string; imagePlaceholder?: string; imageUrl?: string; ctrHint: string; isSelected: boolean }>; ytUrlInput: string; ytThumbnailUrl: string | null }>(() => {
+    const t = stored?.thumbnailData as { thumbnails?: Array<{ id: string; title: string; imagePlaceholder?: string; imageUrl?: string; ctrHint: string; isSelected: boolean }>; ytUrlInput?: string; ytThumbnailUrl?: string | null } | undefined;
+    if (t && typeof t === 'object' && Array.isArray(t.thumbnails) && t.thumbnails.length > 0) {
+      return {
+        thumbnails: t.thumbnails,
+        ytUrlInput: typeof t.ytUrlInput === 'string' ? t.ytUrlInput : '',
+        ytThumbnailUrl: typeof t.ytThumbnailUrl === 'string' ? t.ytThumbnailUrl : null
+      };
+    }
+    return { thumbnails: [], ytUrlInput: '', ytThumbnailUrl: null };
+  });
+
   useEffect(() => {
     const data = {
       currentStep, activeTags, urlInput, videoFormat, inputMode,
       descriptionInput, scenes, scriptStyle, customScriptStyleText, scriptLength, planningData,
       selectedTopic, generatedTopics, masterScript, selectedStyle,
-      referenceImage, analyzedStylePrompt
+      referenceImage, analyzedStylePrompt,
+      urlAnalysisData,
+      videoUrl,
+      metaTitle, metaDescription, metaPinnedComment,
+      thumbnailData: {
+        thumbnails: thumbnailData.thumbnails,
+        ytUrlInput: thumbnailData.ytUrlInput,
+        ytThumbnailUrl: thumbnailData.ytThumbnailUrl
+      }
     };
     localStorage.setItem(storageKey, JSON.stringify(data));
-  }, [storageKey, currentStep, activeTags, urlInput, videoFormat, inputMode, descriptionInput, scenes, scriptStyle, customScriptStyleText, scriptLength, planningData, selectedTopic, generatedTopics, masterScript, selectedStyle, referenceImage, analyzedStylePrompt]);
+  }, [storageKey, currentStep, activeTags, urlInput, videoFormat, inputMode, descriptionInput, scenes, scriptStyle, customScriptStyleText, scriptLength, planningData, selectedTopic, generatedTopics, masterScript, selectedStyle, referenceImage, analyzedStylePrompt, urlAnalysisData, videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData]);
 
   const value = {
     currentStep, setCurrentStep, activeTags, setActiveTags, urlInput, setUrlInput, urlAnalysisData, setUrlAnalysisData,
@@ -110,7 +145,10 @@ const GlobalProvider: React.FC<{ children: React.ReactNode; sessionId?: number }
     generatedTopics, setGeneratedTopics, selectedTopic, setSelectedTopic, referenceScript, setReferenceScript,
     scriptStyle, setScriptStyle, customScriptStyleText, setCustomScriptStyleText, scriptLength, setScriptLength, planningData, setPlanningData,
     isFileLoaded, setIsFileLoaded, masterScript, setMasterScript, selectedStyle, setSelectedStyle,
-    referenceImage, setReferenceImage, analyzedStylePrompt, setAnalyzedStylePrompt
+    referenceImage, setReferenceImage, analyzedStylePrompt, setAnalyzedStylePrompt,
+    videoUrl, setVideoUrl,
+    metaTitle, setMetaTitle, metaDescription, setMetaDescription, metaPinnedComment, setMetaPinnedComment,
+    thumbnailData, setThumbnailData
   };
 
   return <GlobalContext.Provider value={value}>{children}</GlobalContext.Provider>;
@@ -728,7 +766,11 @@ const TopicGenerationStep = ({ showToast }: { showToast: (msg: string) => void }
       </div>
 
       <div className="flex justify-end">
-        <button onClick={handleFinalize} disabled={!selectedTopic} className="ui-btn ui-btn--primary">
+        <button
+          onClick={handleFinalize}
+          disabled={!selectedTopic || (selectedTopic === 'manual' && !manualTopic.trim())}
+          className="ui-btn ui-btn--primary"
+        >
           주제 확정 및 시나리오 설계
         </button>
       </div>
@@ -2006,12 +2048,14 @@ function formatTime(sec: number): string {
 const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const context = useContext(GlobalContext);
   const scenes = context?.scenes ?? [];
+  const setCurrentStep = context?.setCurrentStep;
   const sceneDurations = context?.sceneDurations ?? [];
   const videoFormat = context?.videoFormat ?? '9:16';
+  const videoUrl = context?.videoUrl ?? null;
+  const setVideoUrl = context?.setVideoUrl ?? (() => {});
   const [isExporting, setIsExporting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [hoveredClipIndex, setHoveredClipIndex] = useState<number | null>(null);
 
   const timeline = useMemo(() => {
@@ -2035,10 +2079,23 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   }, [scenes, sceneDurations]);
   const totalDuration = timeline.reduce((acc, t) => acc + t.duration, 0);
 
+  const missingClips = useMemo(() => timeline
+    .map((t, idx) => ({ ...t, idx }))
+    .filter(t => !t.thumb || !t.audioUrl)
+    .map(t => {
+      const lacks: string[] = [];
+      if (!t.thumb) lacks.push('이미지');
+      if (!t.audioUrl) lacks.push('음성');
+      return `씬 ${t.idx + 1} (${lacks.join(', ')} 없음)`;
+    }), [timeline]);
+
   const handleExport = async () => {
     const hasAll = timeline.every(t => t.thumb && t.audioUrl);
     if (!hasAll || timeline.length === 0) {
-      showToast('모든 씬에 이미지와 음성이 있어야 영상을 생성할 수 있습니다.');
+      const msg = missingClips.length > 0
+        ? `영상 생성 불가: ${missingClips.join(', ')}. Step 4·5에서 이미지와 음성을 완성해 주세요.`
+        : '모든 씬에 이미지와 음성이 있어야 영상을 생성할 수 있습니다.';
+      showToast(msg);
       return;
     }
     setExportError(null);
@@ -2060,7 +2117,13 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         showToast('영상 URL을 받지 못했습니다.');
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : '영상 생성에 실패했습니다.';
+      let msg = '영상 생성에 실패했습니다.';
+      if (e instanceof Error) {
+        if (e.message.includes('시간이 초과') || e.message.includes('timeout')) msg = '처리 시간이 초과되었습니다. 클립 수를 줄이거나 다시 시도해 주세요.';
+        else if (e.message.includes('한도를 초과')) msg = '요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.';
+        else if (e.message.includes('서버 오류')) msg = '서버에 일시적인 문제가 있습니다. 잠시 후 다시 시도해 주세요.';
+        else msg = e.message;
+      }
       setExportError(msg);
       showToast(msg);
     } finally {
@@ -2082,7 +2145,7 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
       URL.revokeObjectURL(blobUrl);
       showToast('다운로드가 시작되었습니다.');
     } catch {
-      showToast('다운로드에 실패했습니다.');
+      showToast('다운로드에 실패했습니다. 링크가 만료되었을 수 있습니다. 영상을 다시 생성해 주세요.');
     } finally {
       setIsDownloading(false);
     }
@@ -2114,21 +2177,34 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
                 <span className="font-medium">{timeline.length}개</span>
               </div>
             </div>
+            {missingClips.length > 0 && timeline.length > 0 && (
+              <p className="text-xs text-amber-600">
+                미완료 씬: {missingClips.join(', ')}
+              </p>
+            )}
             <button
               onClick={handleExport}
               disabled={isExporting || timeline.length === 0}
               className="ui-btn ui-btn--primary w-full"
             >
               {isExporting ? (
-                <><Loader2 size={14} className="animate-spin" /> 렌더링 중...</>
+                <><Loader2 size={14} className="animate-spin" /> 렌더링 중... (클립 수에 따라 최대 5~10분 소요)</>
               ) : (
                 <><Video size={14} /> 영상 생성</>
               )}
             </button>
+            {isExporting && (
+              <p className="text-xs text-slate-500">
+                서버에서 이미지와 음성을 합성하고 있습니다. 이 창을 닫지 마세요.
+              </p>
+            )}
             {exportError && <p className="text-xs text-red-600">{exportError}</p>}
             {videoUrl && (
               <div className="flex flex-col gap-3 pt-2 border-t border-slate-200">
                 <span className="ui-label">생성된 영상</span>
+                <p className="rounded-xl border border-border/70 bg-secondary/45 px-3 py-2 text-xs text-muted-foreground">
+                  영상 링크는 일정 시간 후 만료될 수 있습니다. 보관하시려면 아래에서 다운로드해 주세요.
+                </p>
                 <div className="rounded-xl overflow-hidden border border-slate-200 bg-black aspect-video max-h-[320px]">
                   <video
                     src={videoUrl}
@@ -2229,6 +2305,15 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
           <div className="rounded-2xl border border-border/70 bg-secondary/45 px-4 py-3 text-sm text-muted-foreground leading-relaxed">
             위 타임라인은 각 씬의 시작·종료 시간과 비율을 보여줍니다. 영상 생성 버튼을 누르면 서버에서 이미지와 음성을 합쳐 최종 영상으로 렌더링합니다.
           </div>
+          {setCurrentStep && (
+            <button
+              type="button"
+              onClick={() => setCurrentStep(7)}
+              className="ui-btn ui-btn--primary w-full flex items-center justify-center gap-2"
+            >
+              메타데이터 설정 <ChevronRight size={18} />
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -2237,12 +2322,9 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
 // --- [Step 7: 최적화 메타 설정 — AI 자동 생성] ---
 const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
-  const { selectedTopic, planningData } = useGlobal();
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [pinnedComment, setPinnedComment] = useState('');
+  const { selectedTopic, planningData, metaTitle, setMetaTitle, metaDescription, setMetaDescription, metaPinnedComment, setMetaPinnedComment, setCurrentStep } = useGlobal();
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedOnce, setGeneratedOnce] = useState(false);
+  const [generatedOnce, setGeneratedOnce] = useState(() => !!(metaTitle || metaDescription || metaPinnedComment));
 
   const handleGenerateAll = async () => {
     setIsGenerating(true);
@@ -2252,9 +2334,9 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         summary: planningData?.summary,
         targetDuration: planningData?.targetDuration,
       });
-      setTitle(meta.title);
-      setDescription(meta.description);
-      setPinnedComment(meta.pinnedComment);
+      setMetaTitle(meta.title);
+      setMetaDescription(meta.description);
+      setMetaPinnedComment(meta.pinnedComment);
       setGeneratedOnce(true);
       showToast('메타데이터 생성이 완료되었습니다.');
     } catch (e) {
@@ -2272,9 +2354,9 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         summary: planningData?.summary,
         targetDuration: planningData?.targetDuration,
       });
-      if (field === 'title') setTitle(meta.title);
-      if (field === 'description') setDescription(meta.description);
-      if (field === 'pinnedComment') setPinnedComment(meta.pinnedComment);
+      if (field === 'title') setMetaTitle(meta.title);
+      if (field === 'description') setMetaDescription(meta.description);
+      if (field === 'pinnedComment') setMetaPinnedComment(meta.pinnedComment);
       showToast(`${field === 'title' ? '제목' : field === 'description' ? '설명' : '고정댓글'}을 다시 생성했습니다.`);
     } catch (e) {
       showToast('다시 생성에 실패했습니다.');
@@ -2319,8 +2401,8 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
           </div>
           <input
             type="text"
-            value={title}
-            onChange={e => setTitle(e.target.value)}
+            value={metaTitle}
+            onChange={e => setMetaTitle(e.target.value)}
             placeholder="AI 생성 버튼을 누르면 제목이 생성됩니다"
             className="ui-input"
           />
@@ -2339,8 +2421,8 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
             </button>
           </div>
           <textarea
-            value={description}
-            onChange={e => setDescription(e.target.value)}
+            value={metaDescription}
+            onChange={e => setMetaDescription(e.target.value)}
             placeholder="타임라인과 해시태그가 포함된 영상 설명이 생성됩니다"
             className="ui-textarea min-h-[200px] whitespace-pre-wrap"
           />
@@ -2359,8 +2441,8 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
             </button>
           </div>
           <textarea
-            value={pinnedComment}
-            onChange={e => setPinnedComment(e.target.value)}
+            value={metaPinnedComment}
+            onChange={e => setMetaPinnedComment(e.target.value)}
             placeholder="영상 업로드 후 고정할 댓글 문구가 생성됩니다"
             className="ui-textarea min-h-[120px]"
           />
@@ -2372,6 +2454,16 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
             <p className="text-sm">오른쪽 상단 <strong>AI로 메타데이터 생성</strong>을 누르면 제목·설명·고정댓글이 한 번에 생성됩니다.</p>
           </div>
         )}
+
+        {setCurrentStep && (
+          <button
+            type="button"
+            onClick={() => setCurrentStep(8)}
+            className="ui-btn ui-btn--primary w-full flex items-center justify-center gap-2"
+          >
+            썸네일 연구소 <ChevronRight size={18} />
+          </button>
+        )}
       </div>
     </div>
   );
@@ -2379,9 +2471,10 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
 // --- [Step 8: 썸네일 연구소] ---
 const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
-  const [thumbnails, setThumbnails] = useState<ThumbnailCandidate[]>(MOCK_THUMBNAILS);
-  const [ytUrlInput, setYtUrlInput] = useState('');
-  const [ytThumbnailUrl, setYtThumbnailUrl] = useState<string | null>(null);
+  const { thumbnailData, setThumbnailData } = useGlobal();
+  const thumbnails = (thumbnailData.thumbnails?.length ?? 0) > 0 ? thumbnailData.thumbnails as ThumbnailCandidate[] : MOCK_THUMBNAILS;
+  const ytUrlInput = thumbnailData.ytUrlInput;
+  const ytThumbnailUrl = thumbnailData.ytThumbnailUrl;
   const [ytThumbnailError, setYtThumbnailError] = useState(false);
   const [isBenchmarking, setIsBenchmarking] = useState(false);
   const [benchmarkSummary, setBenchmarkSummary] = useState<string | null>(null);
@@ -2389,13 +2482,13 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const loadYtThumbnail = () => {
     const id = getYoutubeVideoId(ytUrlInput);
     if (!id) {
-      setYtThumbnailUrl(null);
+      setThumbnailData(prev => ({ ...prev, ytThumbnailUrl: null }));
       setYtThumbnailError(true);
       showToast('유효한 유튜브 URL을 입력해주세요.');
       return;
     }
     setYtThumbnailError(false);
-    setYtThumbnailUrl(getYoutubeThumbnailUrl(id));
+    setThumbnailData(prev => ({ ...prev, ytThumbnailUrl: getYoutubeThumbnailUrl(id) }));
   };
 
   const handleBenchmark = async () => {
@@ -2415,7 +2508,8 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         ctrHint: '레퍼런스 분석 기반 생성',
         isSelected: false,
       };
-      setThumbnails(prev => [...prev, newThumb]);
+      const base = (thumbnailData.thumbnails?.length ?? 0) > 0 ? thumbnailData.thumbnails : MOCK_THUMBNAILS;
+      setThumbnailData(prev => ({ ...prev, thumbnails: [...base, newThumb] }));
       showToast('벤치마킹 썸네일이 생성되었습니다.');
     } catch (e) {
       showToast('벤치마킹 생성에 실패했습니다.');
@@ -2425,7 +2519,8 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   };
 
   const selectThumb = (id: string) => {
-    setThumbnails(prev => prev.map(t => ({ ...t, isSelected: t.id === id })));
+    const base = (thumbnailData.thumbnails?.length ?? 0) > 0 ? thumbnailData.thumbnails : MOCK_THUMBNAILS;
+    setThumbnailData(prev => ({ ...prev, thumbnails: base.map((t: ThumbnailCandidate) => ({ ...t, isSelected: t.id === id })) }));
   };
 
   return (
@@ -2442,7 +2537,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
           <input
             type="text"
             value={ytUrlInput}
-            onChange={e => { setYtUrlInput(e.target.value); setYtThumbnailError(false); }}
+            onChange={e => { setThumbnailData(prev => ({ ...prev, ytUrlInput: e.target.value })); setYtThumbnailError(false); }}
             onKeyDown={e => e.key === 'Enter' && loadYtThumbnail()}
             placeholder="https://www.youtube.com/watch?v=... 또는 youtu.be/..."
             className="ui-input flex-1"
@@ -2461,7 +2556,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
                 src={ytThumbnailUrl}
                 alt="유튜브 썸네일"
                 className="aspect-video w-full object-cover block"
-                onError={() => { setYtThumbnailUrl(null); setYtThumbnailError(true); }}
+                onError={() => { setThumbnailData(prev => ({ ...prev, ytThumbnailUrl: null })); setYtThumbnailError(true); }}
               />
             </div>
             <button
