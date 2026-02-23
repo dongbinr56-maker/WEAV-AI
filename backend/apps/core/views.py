@@ -300,3 +300,33 @@ def studio_tts(request):
     except Exception as e:
         logger.exception('studio_tts')
         return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+def studio_video(request):
+    """Studio Step 6 영상 합성. POST JSON: { clips: [{ image_url, audio_url, duration_sec }], aspect_ratio? } -> { video_url, thumbnail_url? }."""
+    body = _parse_json_body(request)
+    if not body or not isinstance(body.get('clips'), list):
+        return JsonResponse({'error': 'clips (array) required'}, status=400)
+    clips = body.get('clips', [])
+    if not clips:
+        return JsonResponse({'error': 'clips must not be empty'}, status=400)
+    for i, c in enumerate(clips):
+        if not isinstance(c, dict) or not c.get('image_url') or not c.get('audio_url'):
+            return JsonResponse({'error': f'clip[{i}] must have image_url and audio_url'}, status=400)
+    aspect_ratio = (body.get('aspect_ratio') or '9:16').strip() or '9:16'
+    try:
+        from apps.ai.fal_client import ffmpeg_compose_video
+        from apps.ai.errors import FALError
+    except ImportError as e:
+        logger.exception('studio_video import')
+        return JsonResponse({'error': str(e)}, status=503)
+    try:
+        result = ffmpeg_compose_video(clips=clips, aspect_ratio=aspect_ratio)
+        return JsonResponse(result)
+    except FALError as e:
+        return JsonResponse({'error': str(e)}, status=502)
+    except Exception as e:
+        logger.exception('studio_video')
+        return JsonResponse({'error': str(e)}, status=500)

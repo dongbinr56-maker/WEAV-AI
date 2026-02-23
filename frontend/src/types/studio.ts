@@ -10,6 +10,12 @@ export interface StudioScene {
   isPromptVisible: boolean;
   isSyncing: boolean;
   isGenerating?: boolean;
+  /** 씬 추가 버튼으로 추가된 씬만 true (대본 분할로 생성된 씬은 false/미설정) */
+  isManualAdd?: boolean;
+  /** Step 5 음성 합성 후 저장된 오디오 URL */
+  audioUrl?: string;
+  /** Step 5 음성 합성 후 저장된 재생 길이(초) */
+  durationSec?: number;
 }
 
 export interface StudioScriptSegment {
@@ -65,6 +71,9 @@ export interface StudioGlobalContextType {
   setDescriptionInput: React.Dispatch<React.SetStateAction<string>>;
   scenes: StudioScene[];
   setScenes: React.Dispatch<React.SetStateAction<StudioScene[]>>;
+  /** Step 5 음성 합성 후 씬별 재생 길이(초). Step 6 영상 생성 시 이 값을 우선 사용. */
+  sceneDurations: number[];
+  setSceneDurations: React.Dispatch<React.SetStateAction<number[]>>;
   scriptSegments: StudioScriptSegment[];
   setScriptSegments: React.Dispatch<React.SetStateAction<StudioScriptSegment[]>>;
 
@@ -77,6 +86,8 @@ export interface StudioGlobalContextType {
   
   scriptStyle: string;
   setScriptStyle: React.Dispatch<React.SetStateAction<string>>;
+  customScriptStyleText: string;
+  setCustomScriptStyleText: React.Dispatch<React.SetStateAction<string>>;
 
   scriptLength: string;
   setScriptLength: React.Dispatch<React.SetStateAction<string>>;

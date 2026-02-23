@@ -3,6 +3,7 @@ import { api } from '../api/apiClient';
 const STUDIO_LLM = '/api/v1/studio/llm/';
 const STUDIO_IMAGE = '/api/v1/studio/image/';
 const STUDIO_TTS = '/api/v1/studio/tts/';
+const STUDIO_VIDEO = '/api/v1/studio/video/';
 
 export interface StudioLlmOptions {
   prompt: string;
@@ -55,5 +56,25 @@ export async function studioTts(options: StudioTtsOptions): Promise<{ url: strin
     text,
     ...(voice_id != null && { voice_id }),
     ...(speed != null && { speed }),
+  });
+}
+
+export interface StudioVideoClip {
+  image_url: string;
+  audio_url: string;
+  duration_sec: number;
+}
+
+export interface StudioExportVideoOptions {
+  clips: StudioVideoClip[];
+  aspect_ratio?: string;
+}
+
+/** Studio Step 6: 이미지+음성 클립을 합쳐 영상으로 내보내기 (fal ffmpeg compose). */
+export async function studioExportVideo(options: StudioExportVideoOptions): Promise<{ video_url?: string; thumbnail_url?: string }> {
+  const { clips, aspect_ratio } = options;
+  return api.post<{ video_url?: string; thumbnail_url?: string }>(STUDIO_VIDEO, {
+    clips,
+    ...(aspect_ratio != null && { aspect_ratio }),
   });
 }
