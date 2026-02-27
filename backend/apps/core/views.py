@@ -1,6 +1,9 @@
 import json
 import logging
+import re
+from urllib.parse import parse_qs, urlparse
 
+import requests
 from django.http import JsonResponse
 from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt
@@ -8,9 +11,538 @@ from decouple import config
 
 logger = logging.getLogger(__name__)
 
+YOUTUBE_OEMBED_URL = 'https://www.youtube.com/oembed'
+YOUTUBE_WATCH_URL = 'https://www.youtube.com/watch'
+YOUTUBE_WATCH_USER_AGENT = (
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+    'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+)
+_YOUTUBE_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{11}$')
+YOUTUBE_BENCHMARK_MAX_DURATION_SECONDS = 40 * 60
+
 
 def health(request):
     return JsonResponse({'status': 'ok'})
+
+
+def _extract_youtube_video_id(raw: str):
+    value = (raw or '').strip()
+    if not value:
+        return None
+    if _YOUTUBE_ID_RE.match(value):
+        return value
+
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return None
+
+    host = (parsed.netloc or '').lower()
+    path = (parsed.path or '').strip('/')
+    query = parse_qs(parsed.query or '')
+
+    if host in ('youtu.be', 'www.youtu.be') and path:
+        candidate = path.split('/')[0]
+        return candidate if _YOUTUBE_ID_RE.match(candidate) else None
+
+    if host in ('youtube.com', 'www.youtube.com', 'm.youtube.com'):
+        if path == 'watch':
+            candidate = (query.get('v') or [''])[0]
+            return candidate if _YOUTUBE_ID_RE.match(candidate) else None
+        if path.startswith('shorts/'):
+            candidate = path.split('/', 1)[1].split('/')[0]
+            return candidate if _YOUTUBE_ID_RE.match(candidate) else None
+        if path.startswith('embed/'):
+            candidate = path.split('/', 1)[1].split('/')[0]
+            return candidate if _YOUTUBE_ID_RE.match(candidate) else None
+
+    return None
+
+
+def _fetch_youtube_oembed(video_url: str):
+    try:
+        r = requests.get(
+            YOUTUBE_OEMBED_URL,
+            params={'url': video_url, 'format': 'json'},
+            timeout=10,
+            headers={'User-Agent': YOUTUBE_WATCH_USER_AGENT},
+        )
+        r.raise_for_status()
+        data = r.json()
+        return {
+            'title': (data.get('title') or '').strip(),
+            'channel': (data.get('author_name') or '').strip(),
+            'thumbnail': (data.get('thumbnail_url') or '').strip(),
+        }
+    except Exception as e:
+        logger.info('youtube oembed fetch failed: %s', e)
+        return {'title': '', 'channel': '', 'thumbnail': ''}
+
+
+def _extract_short_description_from_watch_html(html: str):
+    if not html:
+        return ''
+    # watch HTML contains JSON-escaped shortDescription; decode safely via json.loads on quoted string.
+    m = re.search(r'"shortDescription"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
+    if not m:
+        return ''
+    try:
+        return json.loads(f'"{m.group(1)}"').strip()
+    except Exception:
+        return ''
+
+
+def _extract_youtube_length_seconds_from_watch_html(html: str) -> int | None:
+    """
+    Best-effort duration extraction from YouTube watch HTML.
+    - Prefer `lengthSeconds` if present.
+    - Fallback to `approxDurationMs` (ms) if present.
+    """
+    if not html:
+        return None
+
+    # Most common: "lengthSeconds":"2410"
+    m = re.search(r'"lengthSeconds"\s*:\s*"(\d+)"', html)
+    if not m:
+        # Sometimes appears as a number (rare): "lengthSeconds": 2410
+        m = re.search(r'"lengthSeconds"\s*:\s*(\d+)', html)
+    if m:
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    # Fallback: "approxDurationMs":"2410000"
+    m = re.search(r'"approxDurationMs"\s*:\s*"(\d+)"', html)
+    if m:
+        try:
+            return int(int(m.group(1)) / 1000)
+        except Exception:
+            return None
+
+    return None
+
+
+def _fetch_youtube_watch_html(video_id: str) -> str:
+    try:
+        r = requests.get(
+            YOUTUBE_WATCH_URL,
+            params={'v': video_id},
+            timeout=15,
+            headers={'User-Agent': YOUTUBE_WATCH_USER_AGENT, 'Accept-Language': 'ko,en;q=0.9'},
+        )
+        r.raise_for_status()
+        return r.text or ''
+    except Exception as e:
+        logger.info('youtube watch fetch failed: %s', e)
+        return ''
+
+
+def _fetch_youtube_watch_details(video_id: str) -> dict:
+    html = _fetch_youtube_watch_html(video_id)
+    return {
+        'description': _extract_short_description_from_watch_html(html),
+        'durationSeconds': _extract_youtube_length_seconds_from_watch_html(html),
+    }
+
+
+def _fetch_youtube_transcript(video_id: str):
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+    except Exception:
+        return ''
+    try:
+        items = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko', 'en'])
+    except Exception as e:
+        logger.info('youtube transcript fetch failed: %s', e)
+        return ''
+
+    chunks = []
+    total_len = 0
+    for item in items or []:
+        text = str(item.get('text') or '').replace('\n', ' ').strip()
+        if not text:
+            continue
+        chunks.append(text)
+        total_len += len(text) + 1
+        if total_len >= 6000:
+            break
+    return ' '.join(chunks).strip()
+
+
+def _build_youtube_context_payload(raw_url: str):
+    video_id = _extract_youtube_video_id(raw_url)
+    if not video_id:
+        return None
+
+    canonical_url = f'https://www.youtube.com/watch?v={video_id}'
+    oembed = _fetch_youtube_oembed(canonical_url)
+    transcript = _fetch_youtube_transcript(video_id)
+    watch = _fetch_youtube_watch_details(video_id)
+    description = watch.get('description') or ''
+    duration_seconds = watch.get('durationSeconds')
+    return {
+        'videoId': video_id,
+        'url': canonical_url,
+        'title': oembed.get('title') or '',
+        'channel': oembed.get('channel') or '',
+        'thumbnail': oembed.get('thumbnail') or '',
+        'description': description[:4000] if description else '',
+        'transcript': transcript,
+        'hasTranscript': bool(transcript),
+        'durationSeconds': duration_seconds,
+        'source': {
+            'oembed': bool(oembed.get('title') or oembed.get('channel')),
+            'description': bool(description),
+            'transcript': bool(transcript),
+            'duration': isinstance(duration_seconds, int) and duration_seconds > 0,
+        },
+    }
+
+
+@require_GET
+def studio_youtube_context(request):
+    """
+    유튜브 분석용 실제 소스 데이터 수집.
+    GET ?url=... -> { videoId, title, channel, description, transcript, hasTranscript, durationSeconds, source }
+    """
+    raw_url = (request.GET.get('url') or '').strip()
+    if not raw_url:
+        return JsonResponse({'error': 'url query param required'}, status=400)
+
+    payload = _build_youtube_context_payload(raw_url)
+    if not payload:
+        return JsonResponse({'error': 'invalid YouTube URL'}, status=400)
+    return JsonResponse(payload)
+
+
+def _gemini_extract_text(response_data: dict) -> str:
+    for cand in (response_data.get('candidates') or []):
+        content = (cand or {}).get('content') or {}
+        parts = content.get('parts') or []
+        texts = []
+        for part in parts:
+            if isinstance(part, dict) and isinstance(part.get('text'), str):
+                texts.append(part['text'])
+        if texts:
+            return ''.join(texts).strip()
+    return ''
+
+
+def _gemini_generate_json(prompt: str, system_prompt: str, model: str | None = None) -> dict:
+    api_key = config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
+    if not api_key:
+        raise RuntimeError('GEMINI_API_KEY (or GOOGLE_API_KEY) not configured')
+
+    model_name = (model or config('GEMINI_BENCHMARK_MODEL', default='gemini-2.5-flash') or 'gemini-2.5-flash').strip()
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent'
+
+    payload = {
+        'systemInstruction': {
+            'parts': [{'text': system_prompt}],
+        },
+        'contents': [{
+            'role': 'user',
+            'parts': [{'text': prompt}],
+        }],
+        'generationConfig': {
+            'temperature': 0.2,
+            'responseMimeType': 'application/json',
+            'responseJsonSchema': {
+                'type': 'object',
+                'properties': {
+                    'summary': {'type': 'string'},
+                    'patterns': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                    },
+                },
+                'required': ['summary', 'patterns'],
+            },
+        },
+    }
+    r = requests.post(
+        url,
+        headers={
+            'Content-Type': 'application/json',
+            'x-goog-api-key': api_key,
+        },
+        json=payload,
+        timeout=90,
+    )
+    if not r.ok:
+        try:
+            err = r.json().get('error') or {}
+            msg = err.get('message') or str(err)
+        except Exception:
+            msg = r.text or r.reason or f'HTTP {r.status_code}'
+        raise RuntimeError(f'Gemini API 요청 실패 ({r.status_code}): {msg}')
+
+    data = r.json()
+    text = _gemini_extract_text(data)
+    if not text:
+        raise RuntimeError('Gemini API 응답에서 텍스트를 찾지 못했습니다.')
+    try:
+        return json.loads(text)
+    except Exception:
+        # 일부 응답이 코드펜스나 문자열 래핑을 포함할 수 있어 방어적으로 정리
+        cleaned = text.strip()
+        cleaned = re.sub(r'^```json\s*', '', cleaned)
+        cleaned = re.sub(r'^```\s*', '', cleaned)
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+        return json.loads(cleaned)
+
+
+def _gemini_generate_youtube_url_json(youtube_url: str, prompt: str, system_prompt: str, model: str | None = None) -> dict:
+    """
+    Gemini Video Understanding (YouTube URL direct input, preview feature).
+    Docs: video understanding -> Pass YouTube URLs
+    """
+    api_key = config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
+    if not api_key:
+        raise RuntimeError('GEMINI_API_KEY (or GOOGLE_API_KEY) not configured')
+
+    default_model = config('GEMINI_BENCHMARK_VIDEO_MODEL', default='gemini-3-flash-preview') or 'gemini-3-flash-preview'
+    model_name = (model or default_model).strip()
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent'
+    payload = {
+        'systemInstruction': {
+            'parts': [{'text': system_prompt}],
+        },
+        'contents': [{
+            'role': 'user',
+            'parts': [
+                {
+                    'fileData': {
+                        # Official docs (Video understanding > Pass YouTube URLs) support public YouTube URL here.
+                        'fileUri': youtube_url,
+                    }
+                },
+                {'text': prompt},
+            ],
+        }],
+        'generationConfig': {
+            'temperature': 0.2,
+            'responseMimeType': 'application/json',
+            'responseJsonSchema': {
+                'type': 'object',
+                'properties': {
+                    'summary': {'type': 'string'},
+                    'patterns': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                    },
+                },
+                'required': ['summary', 'patterns'],
+            },
+        },
+    }
+    r = requests.post(
+        url,
+        headers={
+            'Content-Type': 'application/json',
+            'x-goog-api-key': api_key,
+        },
+        json=payload,
+        timeout=120,
+    )
+    if not r.ok:
+        try:
+            err = r.json().get('error') or {}
+            msg = err.get('message') or str(err)
+        except Exception:
+            msg = r.text or r.reason or f'HTTP {r.status_code}'
+        raise RuntimeError(f'Gemini YouTube URL 분석 요청 실패 ({r.status_code}): {msg}')
+    data = r.json()
+    text = _gemini_extract_text(data)
+    if not text:
+        raise RuntimeError('Gemini YouTube URL 응답에서 텍스트를 찾지 못했습니다.')
+    try:
+        return json.loads(text)
+    except Exception:
+        cleaned = text.strip()
+        cleaned = re.sub(r'^```json\s*', '', cleaned)
+        cleaned = re.sub(r'^```\s*', '', cleaned)
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+        return json.loads(cleaned)
+
+
+def _build_youtube_benchmark_prompt(ctx: dict) -> tuple[str, str]:
+    system_prompt = (
+        'You analyze YouTube video structure in Korean. '
+        'Use ONLY the provided source data (title, channel, description, transcript). '
+        'Do not invent plot details that are not present in the provided data. '
+        'If transcript is missing, explicitly state that the result is metadata-based analysis.'
+    )
+    prompt = '\n'.join([
+        '다음 유튜브 영상의 실제 수집 데이터(제목/채널/설명/자막)를 바탕으로 영상 구조와 패턴을 분석해주세요.',
+        '중요: 제공된 데이터에 없는 내용을 추측하지 마세요.',
+        '자막이 없으면 "메타데이터 기반 분석"임을 summary에 명시하고, 패턴도 일반적인 편집/구성 레벨로만 작성하세요.',
+        '응답은 JSON만 허용됩니다: { "summary": string, "patterns": string[] }',
+        '',
+        f'원본 URL: {ctx.get("url") or "(없음)"}',
+        f'제목: {ctx.get("title") or "(없음)"}',
+        f'채널: {ctx.get("channel") or "(없음)"}',
+        f'설명: {(ctx.get("description") or "(없음)")[:3000]}',
+        f'자막 사용 가능 여부: {"있음" if ctx.get("hasTranscript") else "없음"}',
+        f'자막(일부): {(ctx.get("transcript") or "(없음)")[:6000]}',
+    ])
+    return system_prompt, prompt
+
+
+def _build_youtube_video_benchmark_prompt(ctx: dict) -> tuple[str, str]:
+    system_prompt = (
+        '당신은 영상 분석 전문가다. 유튜브 영상의 시각/음성/대사를 함께 고려해 구조를 분석한다. '
+        '응답은 반드시 한국어 JSON만 출력한다. 추측성 단정은 피하고, 보이는/들리는 근거 중심으로 작성한다.'
+    )
+    prompt = '\n'.join([
+        '이 유튜브 영상을 실제 영상 기준으로 분석해 주세요.',
+        '다음 JSON 형식으로만 응답하세요: { "summary": string, "patterns": string[] }',
+        'summary: 영상의 핵심 내용과 전개 방식 요약 (1~3문장, 한국어)',
+        'patterns: 훅/전개/편집/자막/내레이션/결말처리/CTA 관점에서 벤치마킹 포인트 4~10개',
+        '타임스탬프를 알고 있으면 패턴 문장에 포함해도 됩니다.',
+        '',
+        f'참고 메타데이터(정합성 체크용): 제목={ctx.get("title") or "(없음)"} / 채널={ctx.get("channel") or "(없음)"}',
+        '중요: 영상 자체를 우선 근거로 삼고, 메타데이터는 보조 참고로만 사용하세요.',
+    ])
+    return system_prompt, prompt
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+def studio_youtube_benchmark_analyze(request):
+    """
+    Google AI Studio Gemini를 직접 사용한 유튜브 URL 벤치마킹 분석.
+    POST JSON: { url, model? } -> { summary, patterns, meta }
+    """
+    body = _parse_json_body(request)
+    if not body or not isinstance(body.get('url'), str):
+        return JsonResponse({'error': 'url (string) required'}, status=400)
+    raw_url = (body.get('url') or '').strip()
+    if not raw_url:
+        return JsonResponse({'error': 'url required'}, status=400)
+
+    ctx = _build_youtube_context_payload(raw_url)
+    if not ctx:
+        return JsonResponse({'error': 'invalid YouTube URL'}, status=400)
+    duration_seconds = ctx.get('durationSeconds')
+    if isinstance(duration_seconds, int) and duration_seconds > YOUTUBE_BENCHMARK_MAX_DURATION_SECONDS:
+        mins = int(duration_seconds / 60)
+        return JsonResponse({
+            'error': (
+                f'현재 {YOUTUBE_BENCHMARK_MAX_DURATION_SECONDS // 60}분 이상 영상 벤치마킹은 미구현 상태입니다. '
+                f'({mins}분 영상 감지) {YOUTUBE_BENCHMARK_MAX_DURATION_SECONDS // 60}분 미만의 동영상 URL을 입력해주세요.'
+            ),
+            'meta': {
+                'provider': 'google-ai-studio',
+                'analysisMode': 'duration-gated',
+                'durationSeconds': duration_seconds,
+                'maxDurationSeconds': YOUTUBE_BENCHMARK_MAX_DURATION_SECONDS,
+                'videoId': ctx.get('videoId') or '',
+                'title': ctx.get('title') or '',
+                'channel': ctx.get('channel') or '',
+                'source': ctx.get('source') or {},
+            },
+        }, status=400)
+    if not (ctx.get('title') or ctx.get('description') or ctx.get('transcript')):
+        return JsonResponse({'error': '유튜브 영상의 제목/설명/자막을 가져오지 못했습니다.'}, status=502)
+
+    requested_model = body.get('model')
+    direct_video_enabled = str(config('GEMINI_BENCHMARK_USE_YOUTUBE_URL', default='true')).strip().lower() not in ('0', 'false', 'no', 'off')
+    allow_metadata_fallback = str(config('GEMINI_BENCHMARK_ALLOW_METADATA_FALLBACK', default='false')).strip().lower() in ('1', 'true', 'yes', 'on')
+    direct_video_error = ''
+
+    # 1) Try official Gemini YouTube URL video analysis first (video understanding preview feature).
+    if direct_video_enabled:
+        try:
+            video_sys, video_prompt = _build_youtube_video_benchmark_prompt(ctx)
+            parsed = _gemini_generate_youtube_url_json(ctx.get('url') or raw_url, video_prompt, video_sys, model=requested_model)
+            summary = parsed.get('summary')
+            if not isinstance(summary, str) or not summary.strip():
+                summary = f'{ctx.get("title") or "유튜브 영상"}의 영상 내용 분석'
+            else:
+                summary = summary.strip()
+            patterns = parsed.get('patterns')
+            if not isinstance(patterns, list):
+                patterns = []
+            patterns = [str(p).strip() for p in patterns if str(p).strip()]
+            if not patterns:
+                patterns = ['오프닝 훅 구성', '핵심 전개 리듬', '편집/자막/내레이션 패턴', '마무리 구조']
+            return JsonResponse({
+                'summary': summary,
+                'patterns': patterns[:12],
+                'meta': {
+                    'provider': 'google-ai-studio',
+                    'analysisMode': 'youtube-url-video',
+                    'model': (requested_model or config('GEMINI_BENCHMARK_VIDEO_MODEL', default='gemini-3-flash-preview') or 'gemini-3-flash-preview'),
+                    'hasTranscript': bool(ctx.get('hasTranscript')),
+                    'durationSeconds': ctx.get('durationSeconds'),
+                    'videoId': ctx.get('videoId') or '',
+                    'title': ctx.get('title') or '',
+                    'channel': ctx.get('channel') or '',
+                    'source': ctx.get('source') or {},
+                },
+            })
+        except Exception as e:
+            direct_video_error = str(e)
+            logger.warning('Gemini direct YouTube URL analysis failed, falling back to metadata/transcript: %s', e)
+            if not allow_metadata_fallback:
+                return JsonResponse({
+                    'error': f'Gemini YouTube URL 직접 영상 분석 실패: {direct_video_error}',
+                    'meta': {
+                        'provider': 'google-ai-studio',
+                    'analysisMode': 'youtube-url-video',
+                    'directVideoAttempted': True,
+                    'directVideoError': direct_video_error,
+                    'durationSeconds': ctx.get('durationSeconds'),
+                },
+            }, status=502)
+
+    # 2) Fallback: metadata/transcript-grounded analysis
+    system_prompt, prompt = _build_youtube_benchmark_prompt(ctx)
+    try:
+        parsed = _gemini_generate_json(prompt, system_prompt, model=requested_model)
+    except RuntimeError as e:
+        return JsonResponse({'error': str(e)}, status=502)
+    except Exception as e:
+        logger.exception('studio_youtube_benchmark_analyze')
+        return JsonResponse({'error': str(e)}, status=500)
+
+    summary = parsed.get('summary')
+    if not isinstance(summary, str) or not summary.strip():
+        summary = f'{ctx.get("title") or "유튜브 영상"}{"의 구조 분석" if ctx.get("hasTranscript") else " 메타데이터 기반 구조 추정"}'
+    else:
+        summary = summary.strip()
+    patterns = parsed.get('patterns')
+    if not isinstance(patterns, list):
+        patterns = []
+    patterns = [str(p).strip() for p in patterns if str(p).strip()]
+    if not patterns:
+        patterns = (
+            ['오프닝 훅/도입 구성 확인 필요', '장면 전개 리듬 분석', '마무리 CTA/엔딩 방식 확인']
+            if ctx.get('hasTranscript')
+            else ['제목·설명 기반 주제 파악', '영상 구조는 자막 확보 후 재분석 권장', '편집 패턴 추정 정확도 낮음']
+        )
+    if not ctx.get('hasTranscript') and '메타데이터' not in summary:
+        summary = f'메타데이터 기반 분석: {summary}'
+
+    return JsonResponse({
+        'summary': summary,
+        'patterns': patterns[:12],
+        'meta': {
+            'provider': 'google-ai-studio',
+            'analysisMode': 'metadata-transcript-fallback',
+            'directVideoAttempted': bool(direct_video_enabled),
+            'directVideoError': direct_video_error,
+            'model': (body.get('model') or config('GEMINI_BENCHMARK_MODEL', default='gemini-2.5-flash') or 'gemini-2.5-flash'),
+            'hasTranscript': bool(ctx.get('hasTranscript')),
+            'durationSeconds': ctx.get('durationSeconds'),
+            'videoId': ctx.get('videoId') or '',
+            'title': ctx.get('title') or '',
+            'channel': ctx.get('channel') or '',
+            'source': ctx.get('source') or {},
+        },
+    })
 
 
 # YouTube categoryId: 인기=브이로그·엔터·하우투·코미디·음악, 틈새=교육·과학·게임

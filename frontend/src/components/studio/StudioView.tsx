@@ -328,6 +328,7 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
     const ytRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be|youtube\.com\/shorts)\/.+$/;
     if (!ytRegex.test(url)) return showToast("유효한 유튜브 주소가 아닙니다.");
     
+    setUrlAnalysisData(null);
     setAnalysisResult(p => ({ ...p, isUrlAnalyzing: true, error: null }));
     try {
       const result = await analyzeUrlPattern(url);
@@ -342,8 +343,10 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
       setSelectedBenchmarkPatterns([]);
       showToast("패턴 분석이 완료되었습니다. 패턴을 클릭해 선택한 뒤 주제 생성하기를 누르세요.");
     } catch (e) {
-      setAnalysisResult(p => ({ ...p, isUrlAnalyzing: false, error: "분석 실패" }));
-      showToast("URL 분석에 실패했습니다.");
+      const msg = e instanceof Error ? e.message : "URL 분석에 실패했습니다.";
+      setUrlAnalysisData(null);
+      setAnalysisResult(p => ({ ...p, isUrlAnalyzing: false, error: msg }));
+      showToast(msg);
     }
   };
 

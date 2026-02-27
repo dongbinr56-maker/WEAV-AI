@@ -3,6 +3,8 @@ import { api } from '../api/apiClient';
 const STUDIO_LLM = '/api/v1/studio/llm/';
 const STUDIO_IMAGE = '/api/v1/studio/image/';
 const STUDIO_TTS = '/api/v1/studio/tts/';
+const STUDIO_YOUTUBE_CONTEXT = '/api/v1/studio/youtube-context/';
+const STUDIO_YOUTUBE_BENCHMARK_ANALYZE = '/api/v1/studio/youtube-benchmark-analyze/';
 
 export interface StudioLlmOptions {
   prompt: string;
@@ -23,6 +25,48 @@ export interface StudioTtsOptions {
   text: string;
   voice_id?: string;
   speed?: number;
+}
+
+export interface StudioYouTubeContext {
+  videoId: string;
+  url: string;
+  title: string;
+  channel: string;
+  thumbnail: string;
+  description: string;
+  transcript: string;
+  hasTranscript: boolean;
+  durationSeconds?: number | null;
+  source?: {
+    oembed?: boolean;
+    description?: boolean;
+    transcript?: boolean;
+    duration?: boolean;
+  };
+}
+
+export interface StudioYouTubeBenchmarkAnalysis {
+  summary: string;
+  patterns: string[];
+  meta?: {
+    provider?: string;
+    analysisMode?: string;
+    directVideoAttempted?: boolean;
+    directVideoError?: string;
+    model?: string;
+    hasTranscript?: boolean;
+    durationSeconds?: number | null;
+    maxDurationSeconds?: number;
+    videoId?: string;
+    title?: string;
+    channel?: string;
+    source?: {
+      oembed?: boolean;
+      description?: boolean;
+      transcript?: boolean;
+      duration?: boolean;
+    };
+  };
 }
 
 /** Studio Step 2~4 LLM (fal openrouter). */
@@ -56,4 +100,15 @@ export async function studioTts(options: StudioTtsOptions): Promise<{ url: strin
     ...(voice_id != null && { voice_id }),
     ...(speed != null && { speed }),
   });
+}
+
+/** YouTube URL context (metadata/transcript/description) for benchmarking analysis. */
+export async function studioYouTubeContext(url: string): Promise<StudioYouTubeContext> {
+  const path = `${STUDIO_YOUTUBE_CONTEXT}?url=${encodeURIComponent(url)}`;
+  return api.get<StudioYouTubeContext>(path);
+}
+
+/** YouTube benchmarking analysis via backend Google AI Studio Gemini. */
+export async function studioYouTubeBenchmarkAnalyze(url: string): Promise<StudioYouTubeBenchmarkAnalysis> {
+  return api.post<StudioYouTubeBenchmarkAnalysis>(STUDIO_YOUTUBE_BENCHMARK_ANALYZE, { url });
 }

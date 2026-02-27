@@ -1,4 +1,4 @@
-import { studioLlm, studioImage } from './studioFalApi';
+import { studioLlm, studioImage, studioYouTubeBenchmarkAnalyze } from './studioFalApi';
 
 const LEAD_SCRIPTWRITER_INSTRUCTION = `
 # Role
@@ -92,18 +92,11 @@ export const generateTopics = async (context: { tags: string[], description: str
 };
 
 export const analyzeUrlPattern = async (url: string) => {
-  const sys = 'You analyze YouTube video structure. Reply with JSON only: { "summary": string, "patterns": string[] }. summary and every item in patterns must be in Korean.';
-  const prompt = `다음 유튜브 URL의 영상 구조와 패턴을 분석해주세요. 답변은 반드시 한국어로 해주세요. JSON 형식으로만 응답: { "summary": string, "patterns": string[] }. summary에는 한 문장 요약, patterns에는 영상에서 발견한 패턴(훅, 편집, 자막, CTA 등)을 한국어로 나열하세요.\n\nURL: ${url}`;
-  try {
-    const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
-    const parsed = safeJsonParse<{ summary?: string; patterns?: string[] }>(output, {});
-    return {
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '고정된 인트로와 짧은 하이라이트 구조',
-      patterns: Array.isArray(parsed.patterns) ? parsed.patterns : ['3초 내 훅', '단문 자막', '마지막 CTA'],
-    };
-  } catch (e) {
-    return { summary: '고정된 인트로와 짧은 하이라이트 구조', patterns: ['3초 내 훅', '단문 자막', '마지막 CTA'] };
-  }
+  const res = await studioYouTubeBenchmarkAnalyze(url);
+  return {
+    summary: typeof res.summary === 'string' ? res.summary : '메타데이터 기반 분석 결과를 가져오지 못했습니다.',
+    patterns: Array.isArray(res.patterns) ? res.patterns : [],
+  };
 };
 
 export const generatePlanningStep = async (stepName: string, context: any) => {
