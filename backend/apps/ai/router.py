@@ -15,11 +15,33 @@ from .errors import AIError
 # OpenRouter 모델 ID (fal.ai openrouter/router). 존재하지 않는 ID는 400 유발
 CHAT_MODELS = [
     'google/gemini-2.5-flash',
-    'google/gemini-2.5-pro',
-    'openai/gpt-4o',
-    'openai/gpt-4o-mini',
-    'openai/gpt-4.1',  # gpt-5-chat 대신 OpenRouter에서 지원하는 ID 사용
+    'openai/gpt-4.1',
+    'anthropic/claude-sonnet-4.6',
+    'anthropic/claude-opus-4.6',
+    'anthropic/claude-sonnet-4.5',
+    'meta-llama/llama-4-maverick',
+    'openai/gpt-oss-120b',
 ]
+
+CHAT_MODEL_ALIASES = {
+    # legacy / UI ids
+    'openai/gpt-5-chat': 'openai/gpt-4.1',
+    'openai/gpt-4o': 'openai/gpt-4.1',
+    'openai/gpt-4o-mini': 'openai/gpt-4.1',
+    'google/gemini-2.5-pro': 'google/gemini-2.5-flash',
+    # Gemini bare ids used by older Studio benchmarking code
+    'gemini-2.5-flash': 'google/gemini-2.5-flash',
+    'gemini-2.5-pro': 'google/gemini-2.5-flash',
+}
+
+
+def normalize_chat_model(model: Optional[str]) -> str:
+    m = (model or '').strip() or 'google/gemini-2.5-flash'
+    m = CHAT_MODEL_ALIASES.get(m, m)
+    # If someone passes bare gemini id, map to google/*
+    if '/' not in m and m.startswith('gemini-'):
+        m = f'google/{m}'
+    return m if m in CHAT_MODELS else 'google/gemini-2.5-flash'
 
 IMAGE_MODEL_GOOGLE = FAL_IMAGEN4
 IMAGE_MODEL_FLUX = FAL_FLUX_ULTRA

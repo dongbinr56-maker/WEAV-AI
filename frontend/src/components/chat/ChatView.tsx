@@ -106,8 +106,10 @@ export function ChatView() {
 
   if (!currentSession) {
     return (
-      <div className="flex-1 flex items-center justify-center text-muted-foreground animate-fade-in">
-        <p>왼쪽 메뉴에서 새 채팅을 시작하세요.</p>
+      <div className="weav-chat-bg flex-1 flex items-center justify-center text-muted-foreground animate-fade-in">
+        <p className="px-4 py-2 rounded-xl border border-border/65 bg-card/40 backdrop-blur-sm">
+          왼쪽 메뉴에서 새 채팅을 시작하세요.
+        </p>
       </div>
     );
   }
@@ -293,7 +295,7 @@ export function ChatView() {
                     {renderInputImagePreview(referenceInputUrls, attachmentInputUrls)}
                     <div className="flex justify-end mb-2 items-start gap-2">
                       <div className="max-w-[85%]">
-                        <div className="rounded-xl px-4 py-2 border bg-primary/18 text-foreground border-primary/40 transition-colors duration-200">
+                        <div className="weav-glass-bubble rounded-xl px-4 py-2 border text-foreground border-primary/40 transition-colors duration-200">
                           <p className="whitespace-pre-wrap text-sm">{item.data.prompt}</p>
                         </div>
                       </div>

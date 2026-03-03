@@ -10,4 +10,6 @@ export const sessionApi = {
   patch: (id: number, data: { title?: string; reference_image_urls?: string[] }) =>
     api.patch<Session>(`/api/v1/sessions/${id}/`, data),
   delete: (id: number) => api.delete(`/api/v1/sessions/${id}/`),
+  bulkDelete: (ids: number[]) =>
+    api.post<{ deleted: number; not_found: number[]; forbidden: number[] }>('/api/v1/sessions/bulk-delete/', { ids }),
 };

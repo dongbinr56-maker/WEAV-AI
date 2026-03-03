@@ -18,6 +18,7 @@ import requests
 from .errors import FALError
 
 FAL_BASE = 'https://fal.run'
+FAL_QUEUE_BASE = 'https://queue.fal.run'
 # 채팅: openrouter/router (any-llm deprecated 대체)
 FAL_CHAT_ENDPOINT = 'openrouter/router'
 # Imagen 4 (Google): aspect_ratio "1:1"|"16:9"|"9:16"|"4:3"|"3:4", resolution "1K"|"2K", output_format png|jpeg|webp
@@ -47,6 +48,91 @@ def _fal_headers():
     if not key:
         raise FALError('FAL_KEY not set')
     return {'Authorization': f'Key {key}', 'Content-Type': 'application/json'}
+
+
+def _fal_auth_header() -> dict:
+    key = os.environ.get('FAL_KEY', '')
+    if not key:
+        raise FALError('FAL_KEY not set')
+    return {'Authorization': f'Key {key}'}
+
+
+# UI/레거시 모델 ID → OpenRouter에서 실제 지원되는 ID로 매핑
+MODEL_ALIASES = {
+    'openai/gpt-5-chat': 'openai/gpt-4.1',
+    'openai/gpt-4o': 'openai/gpt-4.1',
+    'openai/gpt-4o-mini': 'openai/gpt-4.1',
+    'google/gemini-2.5-pro': 'google/gemini-2.5-flash',
+}
+
+
+def _normalize_openrouter_model(model: str) -> str:
+    m = (model or '').strip() or 'google/gemini-2.5-flash'
+    return MODEL_ALIASES.get(m, m)
+
+
+def _extract_error_message(resp: requests.Response) -> str:
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            return data.get('detail') or data.get('error') or data.get('message') or str(data)
+        return str(data)
+    except Exception:
+        return resp.text or resp.reason or f'HTTP {resp.status_code}'
+
+
+def _openrouter_queue_submit(payload: dict, timeout: int = 30) -> dict:
+    url = f'{FAL_QUEUE_BASE}/{FAL_CHAT_ENDPOINT}'
+    headers = {**_fal_auth_header(), 'Content-Type': 'application/json'}
+    r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    if not r.ok:
+        msg = _extract_error_message(r)
+        logger.warning("fal openrouter queue submit %s: status=%s body=%s", url, r.status_code, msg)
+        raise FALError(f'OpenRouter 요청 실패 ({r.status_code}): {msg}')
+    return r.json() if r.content else {}
+
+
+def _openrouter_queue_poll(request_id: str, timeout_sec: int = 120, poll_interval_sec: float = 0.6) -> None:
+    import time
+    start = time.time()
+    headers = _fal_auth_header()
+    logs = '1' if _fal_debug_enabled() else '0'
+    status_url = f'{FAL_QUEUE_BASE}/{FAL_CHAT_ENDPOINT}/requests/{request_id}/status?logs={logs}'
+    while True:
+        if time.time() - start > max(1, timeout_sec):
+            raise FALError('OpenRouter 응답 대기 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.')
+        r = requests.get(status_url, headers=headers, timeout=20)
+        if not r.ok:
+            msg = _extract_error_message(r)
+            logger.warning("fal openrouter queue status %s: status=%s body=%s", status_url, r.status_code, msg)
+            raise FALError(f'OpenRouter 상태 조회 실패 ({r.status_code}): {msg}')
+        data = r.json() if r.content else {}
+        status = (data.get('status') or '').upper()
+        if status == 'COMPLETED':
+            return
+        if status in ('FAILED', 'FAILURE', 'ERROR'):
+            logs = data.get('logs')
+            detail = ''
+            if isinstance(logs, dict):
+                # best-effort extraction
+                detail = str(logs.get('message') or logs.get('error') or '').strip()
+            raise FALError(f'OpenRouter 요청이 실패했습니다.{f" {detail}" if detail else ""}')
+        if status in ('IN_QUEUE', 'IN_PROGRESS'):
+            time.sleep(max(0.2, float(poll_interval_sec)))
+            continue
+        logger.warning("fal openrouter queue unknown status: %s", data)
+        raise FALError(f'OpenRouter 상태가 올바르지 않습니다: {status or "unknown"}')
+
+
+def _openrouter_queue_result(request_id: str) -> dict:
+    url = f'{FAL_QUEUE_BASE}/{FAL_CHAT_ENDPOINT}/requests/{request_id}'
+    headers = _fal_auth_header()
+    r = requests.get(url, headers=headers, timeout=30)
+    if not r.ok:
+        msg = _extract_error_message(r)
+        logger.warning("fal openrouter queue result %s: status=%s body=%s", url, r.status_code, msg)
+        raise FALError(f'OpenRouter 결과 조회 실패 ({r.status_code}): {msg}')
+    return r.json() if r.content else {}
 
 
 def _is_private_or_local_url(url: str) -> bool:
@@ -275,27 +361,36 @@ def _sanitize_payload(payload: dict) -> dict:
 
 
 def chat_completion(prompt: str, model: str = 'google/gemini-2.5-flash', system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: Optional[int] = None) -> str:
-    payload = {'prompt': (prompt or '').strip(), 'model': (model or 'google/gemini-2.5-flash').strip(), 'temperature': max(0, min(2, temperature))}
+    model = _normalize_openrouter_model(model)
+    payload = {
+        'prompt': (prompt or '').strip(),
+        'model': model,
+        'temperature': max(0, min(2, temperature)),
+        'reasoning': False,
+    }
     if system_prompt:
         payload['system_prompt'] = system_prompt
     if max_tokens is not None:
         payload['max_tokens'] = max(1, max_tokens)
     if not payload['prompt']:
         raise FALError('prompt is required')
-    url = f'{FAL_BASE}/{FAL_CHAT_ENDPOINT}'
-    r = requests.post(url, headers=_fal_headers(), json=payload, timeout=120)
-    if not r.ok:
-        try:
-            err_body = r.json()
-            msg = err_body.get('detail') or err_body.get('error') or err_body.get('message') or str(err_body)
-        except Exception:
-            msg = r.text or r.reason or f'HTTP {r.status_code}'
-        logger.warning("fal openrouter %s: status=%s body=%s", url, r.status_code, msg)
-        raise FALError(f'OpenRouter 요청 실패 ({r.status_code}): {msg}')
-    data = r.json()
-    if 'output' not in data:
-        raise FALError(data.get('error', 'No output'))
-    return data['output']
+    queue = _openrouter_queue_submit(payload)
+    request_id = queue.get('request_id')
+    if not request_id:
+        raise FALError('OpenRouter 요청 ID를 받지 못했습니다.')
+    if _fal_debug_enabled():
+        logger.info('fal openrouter queue request_id=%s payload=%s', request_id, _sanitize_payload(payload))
+    timeout_sec = int(os.environ.get('FAL_OPENROUTER_TIMEOUT_SEC', '120') or '120')
+    poll_interval = float(os.environ.get('FAL_OPENROUTER_POLL_SEC', '0.6') or '0.6')
+    _openrouter_queue_poll(request_id, timeout_sec=timeout_sec, poll_interval_sec=poll_interval)
+    result = _openrouter_queue_result(request_id)
+    err = result.get('error')
+    if err:
+        raise FALError(str(err))
+    output = result.get('output')
+    if output is None:
+        raise FALError('OpenRouter 응답이 비어 있습니다.')
+    return output if isinstance(output, str) else str(output)
 
 
 def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: str = '1:1', num_images: int = 1, **kwargs) -> list[dict]:

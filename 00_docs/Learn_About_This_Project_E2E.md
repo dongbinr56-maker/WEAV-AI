@@ -363,7 +363,7 @@ RAG 품질을 좌우하는 핵심은 "무엇을 검색하고, 어떻게 섞고, 
   - 4) (옵션) LLM rerank를 켜서 상위 후보를 재정렬
 - rerank 토글(환경 변수)
   - `RERANK_ENABLED=1`이면 rerank 시도
-  - `RERANK_MODEL` 기본: `openai/gpt-4o-mini`
+  - `RERANK_MODEL` 기본: `openai/gpt-4.1`
   - `RERANK_MAX_CANDIDATES`로 rerank 후보 수 제한
 - 문서 RAG의 포인트
   - `document_id`로 memory를 필터링해서 "해당 문서에서만" 근거를 뽑음
@@ -377,7 +377,7 @@ RAG 품질을 좌우하는 핵심은 "무엇을 검색하고, 어떻게 섞고, 
 - Studio는 "세션 목록"만 DB를 쓰고, 워크플로우 상태(기획/대본/장면 등)는 **브라우저 localStorage**에 저장합니다.
 - 백엔드는 Studio 전용 API를 제공:
   - 유튜브 컨텍스트 수집(제목/설명/자막/길이)
-  - Gemini로 벤치마킹 분석(YouTube URL 직접 분석 -> 실패 시 메타데이터/자막 폴백)
+  - fal(OpenRouter)로 벤치마킹 분석(메타데이터/자막 기반)
   - fal(OpenRouter) LLM 호출, 이미지 생성, TTS 호출
 
 관련 엔드포인트:
@@ -448,7 +448,8 @@ RAG 품질을 좌우하는 핵심은 "무엇을 검색하고, 어떻게 섞고, 
 
 - `DATABASE_URL` (PostgreSQL)
 - `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` (Redis)
-- `GEMINI_API_KEY` 또는 `GOOGLE_API_KEY` (Studio YouTube 분석)
+- `GEMINI_API_KEY` 또는 `GOOGLE_API_KEY` (Studio YouTube URL 직접 영상 분석, 선택)
+- `OPENROUTER_BENCHMARK_MODEL` (Studio YouTube 메타데이터/자막 기반 벤치마킹 분석 모델, 선택)
 - `YOUTUBE_API_KEY` (Studio trending)
 
 ### 7.3 MinIO 관련(중요)

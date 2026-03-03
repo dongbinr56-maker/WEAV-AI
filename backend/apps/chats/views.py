@@ -92,6 +92,53 @@ def session_detail(request, session_id):
     return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
 
+@api_view(['POST'])
+def session_bulk_delete(request):
+    """
+    Bulk delete sessions with a single request to avoid proxy rate limits.
+    Body: { "ids": [1, 2, 3] } (or a raw JSON list)
+    """
+    raw = request.data
+    ids = raw.get('ids') if isinstance(raw, dict) else raw
+    if not isinstance(ids, list):
+        return Response({'detail': 'ids must be a list'}, status=status.HTTP_400_BAD_REQUEST)
+
+    normalized = []
+    seen = set()
+    for v in ids:
+        try:
+            i = int(v)
+        except (TypeError, ValueError):
+            continue
+        if i <= 0 or i in seen:
+            continue
+        seen.add(i)
+        normalized.append(i)
+
+    if not normalized:
+        return Response({'deleted': 0, 'not_found': [], 'forbidden': []}, status=status.HTTP_200_OK)
+
+    qs = Session.objects.filter(pk__in=normalized)
+    found = {s.id: s for s in qs}
+    not_found = [i for i in normalized if i not in found]
+
+    forbidden = []
+    deletable = []
+    for sid, s in found.items():
+        if s.user and request.user.is_authenticated and s.user != request.user:
+            forbidden.append(sid)
+        else:
+            deletable.append(sid)
+
+    if deletable:
+        Session.objects.filter(pk__in=deletable).delete()
+
+    return Response(
+        {'deleted': len(deletable), 'not_found': not_found, 'forbidden': forbidden},
+        status=status.HTTP_200_OK,
+    )
+
+
 @api_view(['GET'])
 def session_messages(request, session_id):
     try:
