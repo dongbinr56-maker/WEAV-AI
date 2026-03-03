@@ -167,3 +167,6 @@ temp/
 *.bak
 *.swp
 *~
+
+# Local exports/artifacts
+output/

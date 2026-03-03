@@ -9,4 +9,7 @@ urlpatterns = [
     path('studio/llm/', views.studio_llm),
     path('studio/image/', views.studio_image),
     path('studio/tts/', views.studio_tts),
+    path('studio/export/', views.studio_export),
+    path('studio/export/job/<str:task_id>/', views.studio_export_job_status),
+    path('studio/export/job/<str:task_id>/cancel/', views.studio_export_job_cancel),
 ]

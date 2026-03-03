@@ -2,9 +2,15 @@ const BASE = import.meta.env.VITE_API_BASE_URL || '';
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const url = path.startsWith('http') ? path : `${BASE}${path}`;
+  const headers = new Headers(options.headers || {});
+  // Default JSON header unless we're sending FormData (browser sets the boundary).
+  const isForm = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  if (!isForm && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
   const res = await fetch(url, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -27,6 +33,8 @@ export const api = {
   get: <T>(path: string) => request<T>(path, { method: 'GET' }),
   post: <T>(path: string, body: unknown) =>
     request<T>(path, { method: 'POST', body: JSON.stringify(body) }),
+  postForm: <T>(path: string, body: FormData) =>
+    request<T>(path, { method: 'POST', body }),
   patch: <T>(path: string, body: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(body) }),
   delete: (path: string) => request<void>(path, { method: 'DELETE' }),

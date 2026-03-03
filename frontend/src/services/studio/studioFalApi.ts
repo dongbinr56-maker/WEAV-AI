@@ -5,6 +5,9 @@ const STUDIO_IMAGE = '/api/v1/studio/image/';
 const STUDIO_TTS = '/api/v1/studio/tts/';
 const STUDIO_YOUTUBE_CONTEXT = '/api/v1/studio/youtube-context/';
 const STUDIO_YOUTUBE_BENCHMARK_ANALYZE = '/api/v1/studio/youtube-benchmark-analyze/';
+const STUDIO_EXPORT = '/api/v1/studio/export/';
+const STUDIO_EXPORT_JOB = '/api/v1/studio/export/job/';
+const STUDIO_UPLOAD_REFERENCE_IMAGE = '/api/v1/chat/image/upload-reference/';
 
 export interface StudioLlmOptions {
   prompt: string;
@@ -48,9 +51,13 @@ export interface StudioYouTubeContext {
 export interface StudioYouTubeBenchmarkAnalysis {
   summary: string;
   patterns: string[];
+  content?: { summary?: string; keyPoints?: string[] };
+  delivery?: { summary?: string; patterns?: string[] };
   meta?: {
     provider?: string;
     analysisMode?: string;
+    contentAnalysisMode?: string;
+    deliveryAnalysisMode?: string;
     directVideoAttempted?: boolean;
     directVideoError?: string;
     model?: string;
@@ -111,4 +118,52 @@ export async function studioYouTubeContext(url: string): Promise<StudioYouTubeCo
 /** YouTube benchmarking analysis via backend Google AI Studio Gemini. */
 export async function studioYouTubeBenchmarkAnalyze(url: string): Promise<StudioYouTubeBenchmarkAnalysis> {
   return api.post<StudioYouTubeBenchmarkAnalysis>(STUDIO_YOUTUBE_BENCHMARK_ANALYZE, { url });
+}
+
+/** Upload a reference image and get a public URL (reuses chat image upload endpoint). */
+export async function uploadStudioReferenceImage(file: File): Promise<{ url: string }> {
+  const form = new FormData();
+  form.append('image', file);
+  return api.postForm<{ url: string }>(STUDIO_UPLOAD_REFERENCE_IMAGE, form);
+}
+
+export type StudioExportScene = {
+  image_url: string;
+  audio_url: string;
+  text?: string;
+  duration_sec?: number;
+};
+
+export type StudioExportResponse = { task_id: string; job_id: number };
+
+export async function studioExport(options: {
+  session_id: number;
+  aspect_ratio: '9:16' | '16:9';
+  fps?: number;
+  subtitles_enabled?: boolean;
+  burn_in_subtitles?: boolean;
+  scenes: StudioExportScene[];
+}): Promise<StudioExportResponse> {
+  return api.post<StudioExportResponse>(STUDIO_EXPORT, options);
+}
+
+export type StudioExportJobStatus = {
+  task_id: string;
+  job_id: number;
+  kind: string;
+  status: 'pending' | 'running' | 'success' | 'failure';
+  result: {
+    video_url?: string;
+    captions?: { srt_url?: string | null; vtt_url?: string | null; burn_in?: boolean; enabled?: boolean };
+    meta?: unknown;
+  };
+  error?: string;
+};
+
+export async function studioExportJobStatus(taskId: string): Promise<StudioExportJobStatus> {
+  return api.get<StudioExportJobStatus>(`${STUDIO_EXPORT_JOB}${encodeURIComponent(taskId)}/`);
+}
+
+export async function studioExportJobCancel(taskId: string): Promise<{ status: string }> {
+  return api.post<{ status: string }>(`${STUDIO_EXPORT_JOB}${encodeURIComponent(taskId)}/cancel/`, {});
 }

@@ -290,7 +290,7 @@ def job_cancel(request, task_id):
 @api_view(['GET'])
 def job_status(request, task_id):
     job = get_object_or_404(Job, task_id=task_id)
-    payload = {'task_id': task_id, 'job_id': job.id, 'status': job.status}
+    payload = {'task_id': task_id, 'job_id': job.id, 'status': job.status, 'kind': job.kind, 'result': job.result or {}}
     if job.status == 'success':
         if job.message_id:
             payload['message'] = MessageSerializer(job.message).data

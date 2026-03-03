@@ -293,6 +293,185 @@ def _gemini_generate_json(prompt: str, system_prompt: str, model: str | None = N
         return json.loads(cleaned)
 
 
+def _gemini_generate_dual_benchmark_json(prompt: str, system_prompt: str, model: str | None = None) -> dict:
+    """
+    Gemini JSON output with two sections:
+    - content: 상세 내용 요약/핵심 포인트
+    - delivery: 전개/패턴(벤치마킹 포인트)
+    """
+    api_key = config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
+    if not api_key:
+        raise RuntimeError('GEMINI_API_KEY (or GOOGLE_API_KEY) not configured')
+
+    model_name = (model or config('GEMINI_BENCHMARK_MODEL', default='gemini-2.5-flash') or 'gemini-2.5-flash').strip()
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent'
+
+    payload = {
+        'systemInstruction': {
+            'parts': [{'text': system_prompt}],
+        },
+        'contents': [{
+            'role': 'user',
+            'parts': [{'text': prompt}],
+        }],
+        'generationConfig': {
+            'temperature': 0.2,
+            'responseMimeType': 'application/json',
+            'responseJsonSchema': {
+                'type': 'object',
+                'properties': {
+                    'content': {
+                        'type': 'object',
+                        'properties': {
+                            'summary': {'type': 'string'},
+                            'keyPoints': {
+                                'type': 'array',
+                                'items': {'type': 'string'},
+                            },
+                        },
+                        'required': ['summary', 'keyPoints'],
+                    },
+                    'delivery': {
+                        'type': 'object',
+                        'properties': {
+                            'summary': {'type': 'string'},
+                            'patterns': {
+                                'type': 'array',
+                                'items': {'type': 'string'},
+                            },
+                        },
+                        'required': ['summary', 'patterns'],
+                    },
+                },
+                'required': ['content', 'delivery'],
+            },
+        },
+    }
+    r = requests.post(
+        url,
+        headers={
+            'Content-Type': 'application/json',
+            'x-goog-api-key': api_key,
+        },
+        json=payload,
+        timeout=90,
+    )
+    if not r.ok:
+        try:
+            err = r.json().get('error') or {}
+            msg = err.get('message') or str(err)
+        except Exception:
+            msg = r.text or r.reason or f'HTTP {r.status_code}'
+        raise RuntimeError(f'Gemini API 요청 실패 ({r.status_code}): {msg}')
+
+    data = r.json()
+    text = _gemini_extract_text(data)
+    if not text:
+        raise RuntimeError('Gemini API 응답에서 텍스트를 찾지 못했습니다.')
+    try:
+        return json.loads(text)
+    except Exception:
+        cleaned = text.strip()
+        cleaned = re.sub(r'^```json\s*', '', cleaned)
+        cleaned = re.sub(r'^```\s*', '', cleaned)
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+        return json.loads(cleaned)
+
+
+def _gemini_generate_youtube_url_dual_benchmark_json(
+    youtube_url: str,
+    prompt: str,
+    system_prompt: str,
+    model: str | None = None,
+) -> dict:
+    """
+    Gemini Video Understanding (YouTube URL direct input) with dual benchmark JSON output.
+    """
+    api_key = config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
+    if not api_key:
+        raise RuntimeError('GEMINI_API_KEY (or GOOGLE_API_KEY) not configured')
+
+    default_model = config('GEMINI_BENCHMARK_VIDEO_MODEL', default='gemini-3-flash-preview') or 'gemini-3-flash-preview'
+    model_name = (model or default_model).strip()
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent'
+    payload = {
+        'systemInstruction': {
+            'parts': [{'text': system_prompt}],
+        },
+        'contents': [{
+            'role': 'user',
+            'parts': [
+                {
+                    'fileData': {
+                        'fileUri': youtube_url,
+                    }
+                },
+                {'text': prompt},
+            ],
+        }],
+        'generationConfig': {
+            'temperature': 0.2,
+            'responseMimeType': 'application/json',
+            'responseJsonSchema': {
+                'type': 'object',
+                'properties': {
+                    'content': {
+                        'type': 'object',
+                        'properties': {
+                            'summary': {'type': 'string'},
+                            'keyPoints': {
+                                'type': 'array',
+                                'items': {'type': 'string'},
+                            },
+                        },
+                        'required': ['summary', 'keyPoints'],
+                    },
+                    'delivery': {
+                        'type': 'object',
+                        'properties': {
+                            'summary': {'type': 'string'},
+                            'patterns': {
+                                'type': 'array',
+                                'items': {'type': 'string'},
+                            },
+                        },
+                        'required': ['summary', 'patterns'],
+                    },
+                },
+                'required': ['content', 'delivery'],
+            },
+        },
+    }
+    r = requests.post(
+        url,
+        headers={
+            'Content-Type': 'application/json',
+            'x-goog-api-key': api_key,
+        },
+        json=payload,
+        timeout=120,
+    )
+    if not r.ok:
+        try:
+            err = r.json().get('error') or {}
+            msg = err.get('message') or str(err)
+        except Exception:
+            msg = r.text or r.reason or f'HTTP {r.status_code}'
+        raise RuntimeError(f'Gemini YouTube URL 분석 요청 실패 ({r.status_code}): {msg}')
+    data = r.json()
+    text = _gemini_extract_text(data)
+    if not text:
+        raise RuntimeError('Gemini YouTube URL 응답에서 텍스트를 찾지 못했습니다.')
+    try:
+        return json.loads(text)
+    except Exception:
+        cleaned = text.strip()
+        cleaned = re.sub(r'^```json\s*', '', cleaned)
+        cleaned = re.sub(r'^```\s*', '', cleaned)
+        cleaned = re.sub(r'\s*```$', '', cleaned)
+        return json.loads(cleaned)
+
+
 def _gemini_generate_youtube_url_json(youtube_url: str, prompt: str, system_prompt: str, model: str | None = None) -> dict:
     """
     Gemini Video Understanding (YouTube URL direct input, preview feature).
@@ -369,6 +548,10 @@ def _gemini_generate_youtube_url_json(youtube_url: str, prompt: str, system_prom
 
 def _build_youtube_benchmark_prompt(ctx: dict) -> tuple[str, str]:
     system_prompt = (
+        'Persona: You are a senior YouTube content analyst and benchmarking specialist. '
+        'You have deep, practical knowledge of high-retention structures and can extract reusable patterns for creators. '
+        'You follow the user request precisely and produce excellent, evidence-based outputs. '
+        'You do not mention this persona in the output. '
         'You analyze YouTube video structure in Korean. '
         'Use ONLY the provided source data (title, channel, description, transcript). '
         'Do not invent plot details that are not present in the provided data. '
@@ -392,6 +575,10 @@ def _build_youtube_benchmark_prompt(ctx: dict) -> tuple[str, str]:
 
 def _build_youtube_video_benchmark_prompt(ctx: dict) -> tuple[str, str]:
     system_prompt = (
+        'Persona: You are a senior video analyst and YouTube benchmarking specialist. '
+        'You have deep, hands-on expertise in analyzing pacing, hooks, editing rhythms, and retention mechanics. '
+        'You follow the user request precisely and produce excellent, evidence-based outputs. '
+        'You do not mention this persona in the output. '
         '당신은 영상 분석 전문가다. 유튜브 영상의 시각/음성/대사를 함께 고려해 구조를 분석한다. '
         '응답은 반드시 한국어 JSON만 출력한다. 추측성 단정은 피하고, 보이는/들리는 근거 중심으로 작성한다.'
     )
@@ -401,6 +588,77 @@ def _build_youtube_video_benchmark_prompt(ctx: dict) -> tuple[str, str]:
         'summary: 영상의 핵심 내용과 전개 방식 요약 (1~3문장, 한국어)',
         'patterns: 훅/전개/편집/자막/내레이션/결말처리/CTA 관점에서 벤치마킹 포인트 4~10개',
         '타임스탬프를 알고 있으면 패턴 문장에 포함해도 됩니다.',
+        '',
+        f'참고 메타데이터(정합성 체크용): 제목={ctx.get("title") or "(없음)"} / 채널={ctx.get("channel") or "(없음)"}',
+        '중요: 영상 자체를 우선 근거로 삼고, 메타데이터는 보조 참고로만 사용하세요.',
+    ])
+    return system_prompt, prompt
+
+
+def _build_youtube_benchmark_dual_prompt(ctx: dict) -> tuple[str, str]:
+    """
+    Metadata/transcript grounded dual benchmark prompt.
+    Returns { content{summary,keyPoints}, delivery{summary,patterns} }.
+    """
+    system_prompt = (
+        'Persona: You are a senior YouTube content analyst and benchmarking specialist. '
+        'You have deep, practical knowledge of high-retention structures and can extract reusable patterns for creators. '
+        'You follow the user request precisely and produce excellent, evidence-based outputs. '
+        'You do not mention this persona in the output. '
+        'You analyze YouTube videos in Korean. '
+        'Use ONLY the provided source data (title, channel, description, transcript). '
+        'Do not invent details that are not present in the provided data. '
+        'If transcript is missing, explicitly state that the result is metadata-based analysis.'
+    )
+    prompt = '\n'.join([
+        '다음 유튜브 영상의 실제 수집 데이터(제목/채널/설명/자막)를 바탕으로 2가지 결과를 JSON으로 출력해주세요.',
+        '',
+        '1) content: 영상 "내용 자체"를 상세하고 구체적으로 벤치마킹',
+        '- content.summary: 4~10문장 한국어 요약 (자막/설명 근거 중심, 추측 금지)',
+        '- content.keyPoints: 핵심 내용 포인트 6~14개 (각 1문장, 가능한 한 구체적으로)',
+        '',
+        '2) delivery: 시청자에게 보여주는 "진행 방식/패턴" 분석',
+        '- delivery.summary: 전개 방식 요약 2~5문장 (훅/전개/편집/자막/내레이션/CTA 관점)',
+        '- delivery.patterns: 벤치마킹 포인트 6~12개 (훅/전개/편집/자막/내레이션/결말/CTA)',
+        '',
+        '중요: 제공된 데이터에 없는 내용은 추측하지 마세요. 자막이 없으면 content.summary에 "메타데이터 기반 분석"임을 명시하세요.',
+        '응답은 JSON만 허용됩니다: { "content": { "summary": string, "keyPoints": string[] }, "delivery": { "summary": string, "patterns": string[] } }',
+        '',
+        f'원본 URL: {ctx.get("url") or "(없음)"}',
+        f'제목: {ctx.get("title") or "(없음)"}',
+        f'채널: {ctx.get("channel") or "(없음)"}',
+        f'설명: {(ctx.get("description") or "(없음)")[:3000]}',
+        f'자막 사용 가능 여부: {"있음" if ctx.get("hasTranscript") else "없음"}',
+        f'자막(일부): {(ctx.get("transcript") or "(없음)")[:6000]}',
+    ])
+    return system_prompt, prompt
+
+
+def _build_youtube_video_benchmark_dual_prompt(ctx: dict) -> tuple[str, str]:
+    """
+    Direct YouTube URL video understanding dual benchmark prompt.
+    Returns { content{summary,keyPoints}, delivery{summary,patterns} }.
+    """
+    system_prompt = (
+        'Persona: You are a senior video analyst and YouTube benchmarking specialist. '
+        'You have deep, hands-on expertise in analyzing pacing, hooks, editing rhythms, and retention mechanics. '
+        'You follow the user request precisely and produce excellent, evidence-based outputs. '
+        'You do not mention this persona in the output. '
+        '응답은 반드시 한국어 JSON만 출력한다. 추측성 단정은 피하고, 보이는/들리는 근거 중심으로 작성한다.'
+    )
+    prompt = '\n'.join([
+        '이 유튜브 영상을 실제 영상 기준으로 분석해, 2가지 결과를 JSON으로 출력해 주세요.',
+        '',
+        '1) content: 영상 "내용 자체"를 상세하고 구체적으로 벤치마킹',
+        '- content.summary: 4~10문장 한국어 요약 (근거 중심, 추측 금지)',
+        '- content.keyPoints: 핵심 내용 포인트 6~14개 (각 1문장)',
+        '',
+        '2) delivery: 시청자에게 보여주는 "진행 방식/패턴" 분석',
+        '- delivery.summary: 전개 방식 요약 2~5문장 (훅/전개/편집/자막/내레이션/CTA 관점)',
+        '- delivery.patterns: 벤치마킹 포인트 6~12개 (훅/전개/편집/자막/내레이션/결말/CTA)',
+        '',
+        '타임스탬프를 알고 있으면 delivery.patterns 문장에 포함해도 됩니다.',
+        '다음 JSON 형식으로만 응답하세요: { "content": { "summary": string, "keyPoints": string[] }, "delivery": { "summary": string, "patterns": string[] } }',
         '',
         f'참고 메타데이터(정합성 체크용): 제목={ctx.get("title") or "(없음)"} / 채널={ctx.get("channel") or "(없음)"}',
         '중요: 영상 자체를 우선 근거로 삼고, 메타데이터는 보조 참고로만 사용하세요.',
@@ -455,25 +713,48 @@ def studio_youtube_benchmark_analyze(request):
     # 1) Try official Gemini YouTube URL video analysis first (video understanding preview feature).
     if direct_video_enabled:
         try:
-            video_sys, video_prompt = _build_youtube_video_benchmark_prompt(ctx)
-            parsed = _gemini_generate_youtube_url_json(ctx.get('url') or raw_url, video_prompt, video_sys, model=requested_model)
-            summary = parsed.get('summary')
-            if not isinstance(summary, str) or not summary.strip():
-                summary = f'{ctx.get("title") or "유튜브 영상"}의 영상 내용 분석'
-            else:
-                summary = summary.strip()
-            patterns = parsed.get('patterns')
+            video_sys, video_prompt = _build_youtube_video_benchmark_dual_prompt(ctx)
+            parsed = _gemini_generate_youtube_url_dual_benchmark_json(ctx.get('url') or raw_url, video_prompt, video_sys, model=requested_model)
+            content = parsed.get('content') if isinstance(parsed, dict) else None
+            delivery = parsed.get('delivery') if isinstance(parsed, dict) else None
+
+            content_summary = (content or {}).get('summary') if isinstance(content, dict) else ''
+            if not isinstance(content_summary, str) or not content_summary.strip():
+                content_summary = f'{ctx.get("title") or "유튜브 영상"}의 내용 요약'
+            content_summary = content_summary.strip()
+            content_key_points = (content or {}).get('keyPoints') if isinstance(content, dict) else []
+            if not isinstance(content_key_points, list):
+                content_key_points = []
+            content_key_points = [str(p).strip() for p in content_key_points if str(p).strip()]
+            if not content_key_points:
+                content_key_points = ['핵심 메시지 1(확인 필요)', '핵심 메시지 2(확인 필요)', '핵심 메시지 3(확인 필요)']
+
+            delivery_summary = (delivery or {}).get('summary') if isinstance(delivery, dict) else ''
+            if not isinstance(delivery_summary, str) or not delivery_summary.strip():
+                delivery_summary = f'{ctx.get("title") or "유튜브 영상"}의 전개/패턴 분석'
+            delivery_summary = delivery_summary.strip()
+            patterns = (delivery or {}).get('patterns') if isinstance(delivery, dict) else []
             if not isinstance(patterns, list):
                 patterns = []
             patterns = [str(p).strip() for p in patterns if str(p).strip()]
             if not patterns:
                 patterns = ['오프닝 훅 구성', '핵심 전개 리듬', '편집/자막/내레이션 패턴', '마무리 구조']
             return JsonResponse({
-                'summary': summary,
+                'summary': delivery_summary,
                 'patterns': patterns[:12],
+                'content': {
+                    'summary': content_summary,
+                    'keyPoints': content_key_points[:14],
+                },
+                'delivery': {
+                    'summary': delivery_summary,
+                    'patterns': patterns[:12],
+                },
                 'meta': {
                     'provider': 'google-ai-studio',
                     'analysisMode': 'youtube-url-video',
+                    'contentAnalysisMode': 'youtube-url-video',
+                    'deliveryAnalysisMode': 'youtube-url-video',
                     'model': (requested_model or config('GEMINI_BENCHMARK_VIDEO_MODEL', default='gemini-3-flash-preview') or 'gemini-3-flash-preview'),
                     'hasTranscript': bool(ctx.get('hasTranscript')),
                     'durationSeconds': ctx.get('durationSeconds'),
@@ -499,21 +780,40 @@ def studio_youtube_benchmark_analyze(request):
             }, status=502)
 
     # 2) Fallback: metadata/transcript-grounded analysis
-    system_prompt, prompt = _build_youtube_benchmark_prompt(ctx)
+    system_prompt, prompt = _build_youtube_benchmark_dual_prompt(ctx)
     try:
-        parsed = _gemini_generate_json(prompt, system_prompt, model=requested_model)
+        parsed = _gemini_generate_dual_benchmark_json(prompt, system_prompt, model=requested_model)
     except RuntimeError as e:
         return JsonResponse({'error': str(e)}, status=502)
     except Exception as e:
         logger.exception('studio_youtube_benchmark_analyze')
         return JsonResponse({'error': str(e)}, status=500)
 
-    summary = parsed.get('summary')
-    if not isinstance(summary, str) or not summary.strip():
-        summary = f'{ctx.get("title") or "유튜브 영상"}{"의 구조 분석" if ctx.get("hasTranscript") else " 메타데이터 기반 구조 추정"}'
+    content = parsed.get('content') if isinstance(parsed, dict) else None
+    delivery = parsed.get('delivery') if isinstance(parsed, dict) else None
+
+    content_summary = (content or {}).get('summary') if isinstance(content, dict) else ''
+    if not isinstance(content_summary, str) or not content_summary.strip():
+        content_summary = f'{ctx.get("title") or "유튜브 영상"}{" 내용 요약" if ctx.get("hasTranscript") else " 메타데이터 기반 내용 추정"}'
     else:
-        summary = summary.strip()
-    patterns = parsed.get('patterns')
+        content_summary = content_summary.strip()
+    content_key_points = (content or {}).get('keyPoints') if isinstance(content, dict) else []
+    if not isinstance(content_key_points, list):
+        content_key_points = []
+    content_key_points = [str(p).strip() for p in content_key_points if str(p).strip()]
+    if not content_key_points:
+        content_key_points = (
+            ['핵심 내용 포인트 1(확인 필요)', '핵심 내용 포인트 2(확인 필요)', '핵심 내용 포인트 3(확인 필요)']
+            if ctx.get('hasTranscript')
+            else ['제목·설명 기반 핵심 포인트', '자막 확보 후 재요약 권장', '세부 내용 추정 정확도 낮음']
+        )
+
+    delivery_summary = (delivery or {}).get('summary') if isinstance(delivery, dict) else ''
+    if not isinstance(delivery_summary, str) or not delivery_summary.strip():
+        delivery_summary = f'{ctx.get("title") or "유튜브 영상"}{"의 구조 분석" if ctx.get("hasTranscript") else " 메타데이터 기반 구조 추정"}'
+    else:
+        delivery_summary = delivery_summary.strip()
+    patterns = (delivery or {}).get('patterns') if isinstance(delivery, dict) else []
     if not isinstance(patterns, list):
         patterns = []
     patterns = [str(p).strip() for p in patterns if str(p).strip()]
@@ -521,17 +821,29 @@ def studio_youtube_benchmark_analyze(request):
         patterns = (
             ['오프닝 훅/도입 구성 확인 필요', '장면 전개 리듬 분석', '마무리 CTA/엔딩 방식 확인']
             if ctx.get('hasTranscript')
-            else ['제목·설명 기반 주제 파악', '영상 구조는 자막 확보 후 재분석 권장', '편집 패턴 추정 정확도 낮음']
+            else ['제목·설명 기반 구성 추정', '영상 구조는 자막 확보 후 재분석 권장', '편집 패턴 추정 정확도 낮음']
         )
-    if not ctx.get('hasTranscript') and '메타데이터' not in summary:
-        summary = f'메타데이터 기반 분석: {summary}'
+    if not ctx.get('hasTranscript') and '메타데이터' not in content_summary:
+        content_summary = f'메타데이터 기반 분석: {content_summary}'
+    if not ctx.get('hasTranscript') and '메타데이터' not in delivery_summary:
+        delivery_summary = f'메타데이터 기반 분석: {delivery_summary}'
 
     return JsonResponse({
-        'summary': summary,
+        'summary': delivery_summary,
         'patterns': patterns[:12],
+        'content': {
+            'summary': content_summary,
+            'keyPoints': content_key_points[:14],
+        },
+        'delivery': {
+            'summary': delivery_summary,
+            'patterns': patterns[:12],
+        },
         'meta': {
             'provider': 'google-ai-studio',
             'analysisMode': 'metadata-transcript-fallback',
+            'contentAnalysisMode': 'metadata-transcript-fallback',
+            'deliveryAnalysisMode': 'metadata-transcript-fallback',
             'directVideoAttempted': bool(direct_video_enabled),
             'directVideoError': direct_video_error,
             'model': (body.get('model') or config('GEMINI_BENCHMARK_MODEL', default='gemini-2.5-flash') or 'gemini-2.5-flash'),
@@ -831,4 +1143,122 @@ def studio_tts(request):
         return JsonResponse({'error': str(e)}, status=502)
     except Exception as e:
         logger.exception('studio_tts')
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+def studio_export(request):
+    """
+    Studio Step 6: Render MP4 (image+audio) and optional captions.
+    POST JSON:
+      {
+        "session_id": number,
+        "aspect_ratio": "9:16" | "16:9",
+        "fps": number?,
+        "subtitles_enabled": boolean?,
+        "burn_in_subtitles": boolean?,
+        "scenes": [
+          { "image_url": string, "audio_url": string, "text": string?, "duration_sec": number? }
+        ]
+      }
+    -> { task_id, job_id }
+    """
+    body = _parse_json_body(request)
+    if not body:
+        return JsonResponse({'error': 'invalid JSON body'}, status=400)
+
+    session_id = body.get('session_id')
+    if not isinstance(session_id, int):
+        try:
+            session_id = int(session_id)
+        except Exception:
+            session_id = None
+    if not session_id:
+        return JsonResponse({'error': 'session_id (number) required'}, status=400)
+
+    aspect_ratio = (body.get('aspect_ratio') or '16:9').strip()
+    if aspect_ratio not in ('9:16', '16:9'):
+        aspect_ratio = '16:9'
+
+    fps = body.get('fps', 30)
+    try:
+        fps = int(fps)
+    except Exception:
+        fps = 30
+    fps = max(10, min(60, fps))
+
+    subtitles_enabled = body.get('subtitles_enabled', True)
+    burn_in_subtitles = body.get('burn_in_subtitles', False)
+    subtitles_enabled = bool(subtitles_enabled)
+    burn_in_subtitles = bool(burn_in_subtitles)
+
+    scenes = body.get('scenes') or []
+    if not isinstance(scenes, list):
+        return JsonResponse({'error': 'scenes must be an array'}, status=400)
+
+    try:
+        from apps.chats.models import Session, Job, SESSION_KIND_STUDIO
+        from .tasks import task_studio_export
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=503)
+
+    try:
+        session = Session.objects.get(pk=session_id)
+    except Session.DoesNotExist:
+        return JsonResponse({'error': 'session not found'}, status=404)
+    if session.kind != SESSION_KIND_STUDIO:
+        return JsonResponse({'error': 'not a studio session'}, status=400)
+
+    job = Job.objects.create(session=session, kind='studio_export', status='pending', result={})
+    task = task_studio_export.delay(
+        job.id,
+        aspect_ratio=aspect_ratio,
+        scenes=scenes,
+        subtitles_enabled=subtitles_enabled,
+        burn_in_subtitles=burn_in_subtitles,
+        fps=fps,
+    )
+    job.task_id = task.id
+    job.save(update_fields=['task_id', 'updated_at'])
+    return JsonResponse({'task_id': task.id, 'job_id': job.id}, status=202)
+
+
+@require_GET
+def studio_export_job_status(request, task_id: str):
+    try:
+        from apps.chats.models import Job
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=503)
+
+    try:
+        job = Job.objects.get(task_id=task_id)
+    except Job.DoesNotExist:
+        return JsonResponse({'error': 'job not found'}, status=404)
+
+    payload = {
+        'task_id': task_id,
+        'job_id': job.id,
+        'kind': job.kind,
+        'status': job.status,
+        'result': job.result or {},
+    }
+    if job.status == 'failure':
+        payload['error'] = job.error_message
+    return JsonResponse(payload)
+
+
+@csrf_exempt
+@require_http_methods(['POST'])
+def studio_export_job_cancel(request, task_id: str):
+    try:
+        from celery import current_app
+        try:
+            from apps.chats.models import Job
+            Job.objects.filter(task_id=task_id).update(status='failure', error_message='cancelled', result={})
+        except Exception:
+            pass
+        current_app.control.revoke(task_id, terminate=True)
+        return JsonResponse({'status': 'cancelled'})
+    except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
