@@ -102,6 +102,8 @@ class Job(models.Model):
     status = models.CharField(max_length=20, default='pending')  # pending | running | success | failure
     message = models.ForeignKey(Message, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
     image_record = models.ForeignKey(ImageRecord, on_delete=models.SET_NULL, null=True, blank=True, related_name='+')
+    # Generic job result payload (e.g. Studio export URLs)
+    result = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

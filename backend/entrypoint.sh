@@ -31,4 +31,7 @@ echo "Collecting static files..."
 python manage.py collectstatic --noinput
 
 echo "Starting Gunicorn..."
-gunicorn config.wsgi:application --bind 0.0.0.0:8000 --timeout 600
+gunicorn config.wsgi:application \
+  --bind 0.0.0.0:8000 \
+  --timeout "${GUNICORN_TIMEOUT:-600}" \
+  --graceful-timeout "${GUNICORN_GRACEFUL_TIMEOUT:-30}"

@@ -7,6 +7,7 @@ export interface StudioScene {
   duration: number;
   cameraWork: string;
   aiPrompt: string;
+  aiPromptKo?: string;
   isPromptVisible: boolean;
   isSyncing: boolean;
   isGenerating?: boolean;
@@ -16,6 +17,8 @@ export interface StudioScene {
   audioUrl?: string;
   /** Step 5 음성 합성 후 저장된 재생 길이(초) */
   durationSec?: number;
+  /** @deprecated durationSec를 사용하세요. */
+  audioDurationSec?: number;
 }
 
 export interface StudioScriptSegment {
@@ -47,6 +50,7 @@ export interface StudioScriptPlanningData {
 }
 
 export interface StudioGlobalContextType {
+  sessionId?: number;
   currentStep: number;
   setCurrentStep: React.Dispatch<React.SetStateAction<number>>;
   activeTags: string[];
@@ -55,6 +59,8 @@ export interface StudioGlobalContextType {
   setUrlInput: React.Dispatch<React.SetStateAction<string>>;
   urlAnalysisData: any;
   setUrlAnalysisData: React.Dispatch<React.SetStateAction<any>>;
+  selectedBenchmarkPatterns: string[];
+  setSelectedBenchmarkPatterns: React.Dispatch<React.SetStateAction<string[]>>;
   isLoading: boolean;
   setIsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   loadingMessage: string | null;
@@ -81,6 +87,8 @@ export interface StudioGlobalContextType {
   setGeneratedTopics: React.Dispatch<React.SetStateAction<string[]>>;
   selectedTopic: string;
   setSelectedTopic: React.Dispatch<React.SetStateAction<string>>;
+  finalTopic: string;
+  setFinalTopic: React.Dispatch<React.SetStateAction<string>>;
   referenceScript: string;
   setReferenceScript: React.Dispatch<React.SetStateAction<string>>;
   
@@ -93,6 +101,8 @@ export interface StudioGlobalContextType {
   setScriptLength: React.Dispatch<React.SetStateAction<string>>;
   planningData: StudioScriptPlanningData;
   setPlanningData: React.Dispatch<React.SetStateAction<StudioScriptPlanningData>>;
+  masterPlan: string;
+  setMasterPlan: React.Dispatch<React.SetStateAction<string>>;
 
   isFileLoaded: boolean;
   setIsFileLoaded: React.Dispatch<React.SetStateAction<boolean>>;
@@ -107,6 +117,18 @@ export interface StudioGlobalContextType {
   setReferenceImage: React.Dispatch<React.SetStateAction<string>>;
   analyzedStylePrompt: string;
   setAnalyzedStylePrompt: React.Dispatch<React.SetStateAction<string>>;
+  analyzedStylePromptKo: string;
+  setAnalyzedStylePromptKo: React.Dispatch<React.SetStateAction<string>>;
+
+  // Studio export / presets
+  selectedVoicePresetId: string;
+  setSelectedVoicePresetId: React.Dispatch<React.SetStateAction<string>>;
+  subtitlesEnabled: boolean;
+  setSubtitlesEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  burnInSubtitles: boolean;
+  setBurnInSubtitles: React.Dispatch<React.SetStateAction<boolean>>;
+  referenceImageUrl: string;
+  setReferenceImageUrl: React.Dispatch<React.SetStateAction<string>>;
 
   // Step 7 메타데이터
   metaTitle: string;

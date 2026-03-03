@@ -1,4 +1,4 @@
-import { studioLlm, studioImage } from './studioFalApi';
+import { studioLlm, studioImage, studioYouTubeBenchmarkAnalyze } from './studioFalApi';
 
 const LEAD_SCRIPTWRITER_INSTRUCTION = `
 # Role
@@ -13,6 +13,107 @@ function safeJsonParse<T>(str: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function buildStudioPersona(options: {
+  role: string;
+  domain: string;
+  style?: string;
+}) {
+  const styleLine = options.style
+    ? `You also have deep, hands-on expertise in the user-selected style: ${options.style}.`
+    : 'You adapt your expertise to the user request and context.';
+  return [
+    'Persona:',
+    `You are a ${options.role}.`,
+    `Domain: ${options.domain}.`,
+    styleLine,
+    'You follow the user request precisely and produce excellent, publish-ready outputs.',
+    'If details are missing, you make reasonable assumptions and keep them explicit in the content.',
+    'You do not mention this persona in the output.',
+  ].join(' ');
+}
+
+function getLocalIsoDate(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function shouldFreshenTopics(topics: string[], userContextText: string) {
+  const ctx = (userContextText || '').toLowerCase();
+  const signals = [
+    /\b20(1\d|2[0-5])\b/, // explicit years up to 2025
+    /d-?\s*day/i,
+    /총선/,
+    /대선/,
+    /전쟁\s*\d+\s*년/,
+    /\d+\s*년\s*전/,
+    /잃어버린\s*30년/,
+  ];
+  const matches = topics.filter((t) => {
+    const s = (t || '').trim();
+    if (!s) return false;
+    return signals.some((re) => re.test(s) && !ctx.includes(s.match(re)?.[0]?.toLowerCase() ?? ''));
+  });
+  return matches.length >= 2;
+}
+
+async function freshenTopics(options: {
+  topics: string[];
+  tags: string[];
+  description: string;
+  today: string;
+  trendTitles?: string[];
+}) {
+  const trendTitles = Array.isArray(options.trendTitles)
+    ? options.trendTitles.map((t) => String(t || '').trim()).filter(Boolean).slice(0, 20)
+    : [];
+  const sys = [
+    buildStudioPersona({
+      role: 'senior YouTube trend editor and headline copywriter',
+      domain: 'making topic lists feel current, relevant, and non-stale without inventing facts',
+    }),
+    `Today is ${options.today}.`,
+    'Rewrite topic ideas to feel relevant as of today.',
+    'Do NOT invent specific real-world claims or time-locked headlines.',
+    'Avoid explicit years and avoid "D-day", "총선", "대선" unless the user explicitly asked for them.',
+    'Avoid named public figures unless they appear in the provided trend titles or user input.',
+    'Keep them in Korean. Return JSON only: { "topics": string[] }.',
+  ].join(' ');
+
+  const prompt = [
+    `Tags: ${options.tags.join(', ') || '(none)'}`,
+    `Description: ${options.description || '(none)'}`,
+    trendTitles.length ? `Demand signals (trend titles):\n- ${trendTitles.join('\n- ')}` : '',
+    '',
+    'Original topic list (Korean):',
+    JSON.stringify(options.topics.slice(0, 12)),
+    '',
+    'Rewrite into 12 topics that keep the general vibe but are evergreen or "recent" framed, without stale/time-locked references.',
+    'Return JSON only: { "topics": string[] }.',
+  ].join('\n');
+
+  const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+  const parsed = safeJsonParse<{ topics?: string[] }>(output, {});
+  return Array.isArray(parsed.topics) ? parsed.topics.slice(0, 12) : options.topics.slice(0, 12);
+}
+
+function truncateText(text: unknown, maxChars: number): string {
+  const s = typeof text === 'string' ? text : JSON.stringify(text ?? '');
+  if (s.length <= maxChars) return s;
+  return `${s.slice(0, maxChars)}…(truncated)`;
+}
+
+function compactPlanningData(planningData: any, perFieldMaxChars = 1200) {
+  if (!planningData || typeof planningData !== 'object') return planningData;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(planningData)) {
+    out[k] = typeof v === 'string' ? truncateText(v, perFieldMaxChars) : v;
+  }
+  return out;
 }
 
 const mockTopics = [
@@ -55,7 +156,13 @@ const createMockImage = (label: string, aspectRatio: "9:16" | "16:9") => {
 };
 
 export const analyzeTopic = async (input: string, mode: 'tag' | 'description') => {
-  const sys = 'You are a YouTube niche analyst. Reply with JSON only: { "niche": string[], "trending": string[], "confidence": number }.';
+  const sys = [
+    buildStudioPersona({
+      role: 'senior YouTube Shorts niche analyst and trend researcher',
+      domain: 'YouTube Shorts strategy, audience fit, and trend signals',
+    }),
+    'Reply with JSON only: { "niche": string[], "trending": string[], "confidence": number }.',
+  ].join(' ');
   const prompt = `Analyze this ${mode} input for YouTube Shorts. Input: "${input}". Return the JSON object.`;
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
@@ -74,17 +181,63 @@ export const analyzeTopic = async (input: string, mode: 'tag' | 'description') =
   }
 };
 
-export const generateTopics = async (context: { tags: string[], description: string, urlData?: { summary?: string; patterns?: string[] } | null }) => {
+export const generateTopics = async (context: {
+  tags: string[];
+  description: string;
+  urlData?: { summary?: string; patterns?: string[] } | null;
+  trendData?: { titles?: string[] } | null;
+}) => {
   const base = context.tags.length ? context.tags[0] : '콘텐츠';
-  const sys = 'You suggest YouTube Shorts topic ideas. Reply with JSON only: { "topics": string[] }. Up to 12 items. All topic strings in Korean.';
+  const today = getLocalIsoDate();
+  const trendTitles = Array.isArray(context.trendData?.titles)
+    ? context.trendData?.titles.map((t) => String(t || '').trim()).filter(Boolean).slice(0, 20)
+    : [];
+  const sys = [
+    buildStudioPersona({
+      role: 'senior YouTube Shorts creative strategist and ideation lead',
+      domain: 'Short-form topic ideation, hooks, and high-CTR packaging',
+    }),
+    'Reply with JSON only: { "topics": string[] }.',
+    'Up to 12 items. All topic strings must be in Korean.',
+    `Today is ${today}. Your suggestions must feel relevant as of today.`,
+    'Do not propose obviously outdated issues or time-locked headlines.',
+    'Do NOT invent specific real-world claims.',
+    'Avoid specific dates and years unless they appear in the provided trend titles, benchmarking context, or user input.',
+    'Avoid named public figures unless they appear in the provided trend titles, benchmarking context, or user input.',
+    'If benchmarking context is provided, use it for structure/tone patterns only; do not reuse its specific names, organizations, dates, elections, or wars unless explicitly present in the user input.',
+    trendTitles.length
+      ? 'If trend titles are provided, treat them as real demand signals and you may reuse their proper nouns, but do not fabricate additional details.'
+      : '',
+  ].join(' ');
   const urlPart = context.urlData && (context.urlData.summary || (context.urlData.patterns?.length ?? 0) > 0)
     ? `\n\n참고할 벤치마킹:\n요약: ${context.urlData.summary || '(없음)'}\n패턴: ${Array.isArray(context.urlData.patterns) ? context.urlData.patterns.join(', ') : '(없음)'}\n위 패턴/스타일을 반영한 주제를 제안하세요.`
     : '';
-  const prompt = `Tags: ${context.tags.join(', ')}. Description: ${context.description}.${urlPart}\n\n12개의 주제 문자열을 제안해주세요. JSON만 응답: { "topics": string[] }.`;
+  const trendPart = trendTitles.length
+    ? `\n\nYouTube demand signals (recent popular titles, KR):\n- ${trendTitles.join('\n- ')}\n이 리스트는 "현재 수요가 높은 소재/키워드" 참고용입니다. 이 범위를 벗어난 실명/연도/선거/전쟁 같은 시간 고정 소재는 새로 만들어내지 마세요.`
+    : '';
+  const prompt = [
+    `Tags: ${context.tags.join(', ') || '(none)'}.`,
+    `Description: ${context.description || '(none)'}.`,
+    urlPart ? `${urlPart}\n\n(Important) Use benchmarking for style only, not subject-matter copying.` : '',
+    trendPart ? `${trendPart}\n\n(Important) Prefer topics that match the demand signals and category intent.` : '',
+    '',
+    'Propose 12 topic strings in Korean.',
+    '- Prefer evergreen angles or "recent" framing without asserting specific claims.',
+    '- Avoid stale/time-locked references (e.g., 2022/2023/총선/대선/D-day) unless present in demand signals or user input.',
+    'Return JSON only: { "topics": string[] }.',
+  ].filter(Boolean).join('\n');
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
     const parsed = safeJsonParse<{ topics?: string[] }>(output, {});
-    const topics = Array.isArray(parsed.topics) ? parsed.topics.slice(0, 12) : mockTopics.map(t => `${base} · ${t}`).slice(0, 12);
+    let topics = Array.isArray(parsed.topics) ? parsed.topics.slice(0, 12) : mockTopics.map(t => `${base} · ${t}`).slice(0, 12);
+    const userCtxText = `${context.tags.join(' ')} ${context.description || ''} ${trendTitles.join(' ')}`;
+    if (shouldFreshenTopics(topics, userCtxText)) {
+      try {
+        topics = await freshenTopics({ topics, tags: context.tags, description: context.description, today, trendTitles });
+      } catch {
+        /* keep original */
+      }
+    }
     return { topics };
   } catch (e) {
     return { topics: mockTopics.map(t => `${base} · ${t}`).slice(0, 12) };
@@ -92,23 +245,53 @@ export const generateTopics = async (context: { tags: string[], description: str
 };
 
 export const analyzeUrlPattern = async (url: string) => {
-  const sys = 'You analyze YouTube video structure. Reply with JSON only: { "summary": string, "patterns": string[] }. summary and every item in patterns must be in Korean.';
-  const prompt = `다음 유튜브 URL의 영상 구조와 패턴을 분석해주세요. 답변은 반드시 한국어로 해주세요. JSON 형식으로만 응답: { "summary": string, "patterns": string[] }. summary에는 한 문장 요약, patterns에는 영상에서 발견한 패턴(훅, 편집, 자막, CTA 등)을 한국어로 나열하세요.\n\nURL: ${url}`;
-  try {
-    const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
-    const parsed = safeJsonParse<{ summary?: string; patterns?: string[] }>(output, {});
-    return {
-      summary: typeof parsed.summary === 'string' ? parsed.summary : '고정된 인트로와 짧은 하이라이트 구조',
-      patterns: Array.isArray(parsed.patterns) ? parsed.patterns : ['3초 내 훅', '단문 자막', '마지막 CTA'],
-    };
-  } catch (e) {
-    return { summary: '고정된 인트로와 짧은 하이라이트 구조', patterns: ['3초 내 훅', '단문 자막', '마지막 CTA'] };
-  }
+  const res = await studioYouTubeBenchmarkAnalyze(url);
+  return {
+    summary: typeof res.summary === 'string' ? res.summary : '메타데이터 기반 분석 결과를 가져오지 못했습니다.',
+    patterns: Array.isArray(res.patterns) ? res.patterns : [],
+    meta: res.meta || {},
+  };
 };
 
 export const generatePlanningStep = async (stepName: string, context: any) => {
-  const sys = `You are a YouTube script planner. For the given step, write a concrete planning draft in 2–4 sentences (Korean). Output only the planning text, no JSON, no "result:" label, no code blocks. Be specific and actionable.`;
-  const prompt = `Step: ${stepName}\n주제: ${context.topic}\n스타일: ${context.style || 'N/A'}\n길이: ${context.length || 'short'}\n이미 작성된 기획: ${JSON.stringify(context.planningData || {}, null, 0)}\n\n위 단계에 맞는 기획 초안을 2~4문장으로 작성하세요.`;
+  const persona = [
+    'Persona:',
+    'You are a senior YouTube long-form content strategist and script planning specialist.',
+    'You have deep, hands-on expertise in planning high-retention videos and translating creative direction into practical, shootable outlines.',
+    `You are also a subject-matter expert in the user-selected style: ${context.style || 'N/A'}.`,
+    'You understand the audience expectations, pacing, structure, and tone for that style and can execute it at a professional level.',
+    'You consistently deliver excellent, publish-ready planning drafts that are specific, actionable, and high quality.',
+  ].join(' ');
+
+  const sys = [
+    persona,
+    'Task:',
+    'Write a rich, detailed planning draft in Korean for the requested step.',
+    'Output only the planning text (Korean), no JSON, no "result:" label, no code blocks.',
+    'Be concrete and actionable: include specifics (facts to cover, beats, pacing, hooks, CTA ideas, editing/graphic cues) rather than vague advice.',
+    'Strictly match the user-selected style and tone.',
+    'Adapt the depth and pacing to the target length.',
+    context.styleRules ? `Style rules:\n${context.styleRules}` : '',
+    'Before you answer, silently verify the draft follows the style rules. If not, revise it until it does.',
+  ].join(' ');
+  const existing = compactPlanningData(context.planningData || {});
+  const masterPlanText = typeof context.masterPlanText === 'string' ? context.masterPlanText.trim() : '';
+  const benchmarkSummary = typeof context.benchmarkSummary === 'string' ? context.benchmarkSummary.trim() : '';
+  const benchmarkPatterns = Array.isArray(context.benchmarkPatterns) ? context.benchmarkPatterns.filter(Boolean) : [];
+  const prompt = [
+    `Step: ${stepName}`,
+    `Topic: ${context.topic}`,
+    `Style (user-selected): ${context.style || 'N/A'}`,
+    `Target length: ${context.length || 'short'}`,
+    masterPlanText ? `Master plan context (Korean, may be truncated):\n${truncateText(masterPlanText, 4000)}\nUse it to keep this step consistent with the overall plan.` : '',
+    benchmarkSummary || benchmarkPatterns.length
+      ? `Benchmarking context:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}\nReflect the summary/patterns where relevant, without copying verbatim.`
+      : '',
+    `Existing plan (JSON, may be truncated): ${truncateText(existing, 6000)}`,
+    '',
+    'Write the planning draft in Korean.',
+    'Use a clear structure with short sections and bullet points.',
+  ].filter(Boolean).join('\n');
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
     const text = (output || '').trim().replace(/^```\w*\s*|\s*```$/g, '').replace(/^["']?result["']?\s*:\s*["']?|["']\s*$/g, '').trim();
@@ -120,6 +303,159 @@ export const generatePlanningStep = async (stepName: string, context: any) => {
     const msg = e instanceof Error ? e.message : String(e);
     return { result: `[${stepName}] 주제: ${context.topic}\n\n⚠️ API 오류: ${msg}\n(백엔드 .env에 FAL_KEY 설정 여부와 서버 로그를 확인해 주세요. 직접 입력도 가능합니다.)` };
   }
+};
+
+export const rewritePlanningStep = async (stepName: string, context: any) => {
+  const persona = [
+    'Persona:',
+    'You are a senior YouTube long-form content strategist and script planning specialist.',
+    `You are also a subject-matter expert in the user-selected style: ${context.style || 'N/A'}.`,
+    'You are excellent at rewriting drafts to better match a target style and constraints.',
+  ].join(' ');
+
+  const sys = [
+    persona,
+    'Task:',
+    'Rewrite the given planning draft in Korean.',
+    'Output only the rewritten planning text (Korean), no JSON, no "result:" label, no code blocks.',
+    context.styleRules ? `Style rules:\n${context.styleRules}` : '',
+    'Before you answer, silently verify the rewrite follows the style rules. If not, revise it until it does.',
+  ].filter(Boolean).join(' ');
+
+  const benchmarkSummary = typeof context.benchmarkSummary === 'string' ? context.benchmarkSummary.trim() : '';
+  const benchmarkPatterns = Array.isArray(context.benchmarkPatterns) ? context.benchmarkPatterns.filter(Boolean) : [];
+  const masterPlanText = typeof context.masterPlanText === 'string' ? context.masterPlanText.trim() : '';
+  const mode = typeof context.mode === 'string' ? context.mode : 'refine';
+  const userInstruction = typeof context.instruction === 'string' ? context.instruction : '';
+  const currentText = typeof context.currentText === 'string' ? context.currentText : '';
+
+  const prompt = [
+    `Step: ${stepName}`,
+    `Topic: ${context.topic}`,
+    `Style (user-selected): ${context.style || 'N/A'}`,
+    mode ? `Rewrite mode: ${mode}` : '',
+    userInstruction ? `User request: ${userInstruction}` : '',
+    masterPlanText ? `Master plan context (Korean, may be truncated):\n${truncateText(masterPlanText, 4000)}\nKeep the rewrite consistent with the master plan.` : '',
+    benchmarkSummary || benchmarkPatterns.length
+      ? `Benchmarking context:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}\nReflect the summary/patterns where relevant, without copying verbatim.`
+      : '',
+    '',
+    'Current draft (Korean):',
+    currentText,
+    '',
+    'Rewrite in Korean with a clear structure (short sections + bullet points where helpful).',
+  ].filter(Boolean).join('\n');
+
+  const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+  const text = (output || '').trim().replace(/^```\w*\s*|\s*```$/g, '').replace(/^["']?result["']?\s*:\s*["']?|["']\s*$/g, '').trim();
+  return { result: text || currentText };
+};
+
+export const generateMasterPlan = async (context: {
+  topic: string;
+  style: string;
+  styleRules?: string;
+  length?: string;
+  benchmarkSummary?: string;
+  benchmarkPatterns?: string[];
+  existingMasterPlan?: string;
+  planningData?: any;
+}) => {
+  const persona = [
+    'Persona:',
+    'You are a senior YouTube long-form content strategist and master planner.',
+    `You are also a subject-matter expert in the user-selected style: ${context.style || 'N/A'}.`,
+    'You specialize in producing cohesive end-to-end planning documents that remain consistent across all sections.',
+    'You consistently deliver excellent, publish-ready planning drafts that are specific, actionable, and high quality.',
+  ].join(' ');
+
+  const sys = [
+    persona,
+    'Task:',
+    'Write a single, cohesive master plan in Korean that includes all 6 planning sections (1~6) end-to-end.',
+    'Output only the planning text (Korean), no JSON, no "result:" label, no code blocks.',
+    'Use explicit section headers exactly like: "1) 콘텐츠 타입", "2) 전체 이야기 한 줄 요약", "3) 오프닝 기획", "4) 본문 구성 설계", "5) 클라이맥스/핵심 메시지", "6) 아웃트로 설계".',
+    'Be concrete and actionable: include beats, hooks, pacing, examples, B-roll/graphics notes, and CTA ideas.',
+    'Strictly match the user-selected style and tone.',
+    context.styleRules ? `Style rules:\n${context.styleRules}` : '',
+    'Before you answer, silently verify the plan follows the style rules and that all 6 sections are consistent with the same topic and message spine.',
+  ].filter(Boolean).join(' ');
+
+  const benchmarkSummary = typeof context.benchmarkSummary === 'string' ? context.benchmarkSummary.trim() : '';
+  const benchmarkPatterns = Array.isArray(context.benchmarkPatterns) ? context.benchmarkPatterns.filter(Boolean) : [];
+  const existingPlan = typeof context.existingMasterPlan === 'string' ? context.existingMasterPlan.trim() : '';
+  const existingParts = compactPlanningData(context.planningData || {});
+
+  const prompt = [
+    `Topic: ${context.topic}`,
+    `Style (user-selected): ${context.style || 'N/A'}`,
+    `Target length: ${context.length || 'short'}`,
+    benchmarkSummary || benchmarkPatterns.length
+      ? `Benchmarking context:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}\nReflect the summary/patterns where relevant, without copying verbatim.`
+      : '',
+    existingPlan ? `Existing master plan (Korean):\n${existingPlan}` : '',
+    `Existing partial plan (JSON, may be truncated): ${truncateText(existingParts, 4000)}`,
+    '',
+    'Write the master plan in Korean with the exact 1)~6) headers.',
+  ].filter(Boolean).join('\n');
+
+  const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+  const text = (output || '').trim().replace(/^```\w*\s*|\s*```$/g, '').replace(/^["']?result["']?\s*:\s*["']?|["']\s*$/g, '').trim();
+  return { result: text || existingPlan };
+};
+
+export const splitMasterPlanToSteps = async (context: {
+  topic: string;
+  style: string;
+  styleRules?: string;
+  masterPlanText: string;
+  benchmarkSummary?: string;
+  benchmarkPatterns?: string[];
+}) => {
+  const sys = [
+    buildStudioPersona({
+      role: 'senior editor and planning-structure specialist',
+      domain: 'extracting structured planning sections from long-form plans',
+      style: context.style,
+    }),
+    'You extract the 6 planning sections from the given master plan and return ONLY JSON.',
+    'Return JSON only with these keys: { "contentType": string, "summary": string, "opening": string, "body": string, "climax": string, "outro": string }.',
+    'All values must be Korean strings.',
+    context.styleRules ? `Style rules:\n${context.styleRules}` : '',
+    'Ensure the extracted sections remain consistent with the topic and match the style rules.',
+  ].filter(Boolean).join(' ');
+
+  const benchmarkSummary = typeof context.benchmarkSummary === 'string' ? context.benchmarkSummary.trim() : '';
+  const benchmarkPatterns = Array.isArray(context.benchmarkPatterns) ? context.benchmarkPatterns.filter(Boolean) : [];
+  const prompt = [
+    `Topic: ${context.topic}`,
+    `Style (user-selected): ${context.style || 'N/A'}`,
+    benchmarkSummary || benchmarkPatterns.length
+      ? `Benchmarking context:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}` : '',
+    '',
+    'Master plan (Korean):',
+    context.masterPlanText,
+    '',
+    'Return the extracted JSON only.',
+  ].filter(Boolean).join('\n');
+
+  const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+  const parsed = safeJsonParse<{
+    contentType?: string;
+    summary?: string;
+    opening?: string;
+    body?: string;
+    climax?: string;
+    outro?: string;
+  }>(output, {});
+  return {
+    contentType: parsed.contentType || '',
+    summary: parsed.summary || '',
+    opening: parsed.opening || '',
+    body: parsed.body || '',
+    climax: parsed.climax || '',
+    outro: parsed.outro || ''
+  };
 };
 
 /** 목표 재생 시간(문자열)을 초 단위로 변환. 30s→30, 1m→60, 3m→180, 5m→300 */
@@ -135,19 +471,49 @@ export function targetDurationToSeconds(td: string | undefined): number {
 function targetDurationToCharHint(sec: number): string {
   if (sec <= 0) return '';
   const chars = Math.floor((sec / 60) * 280);
-  return `전체 대본은 **${chars}자 이내**로 작성하세요 (한국어 TTS 기준 약 ${sec}초).`;
+  return `권장: 전체 대본은 약 ${chars}자 내외 (한국어 TTS 기준 약 ${sec}초).`;
 }
 
-export const synthesizeMasterScript = async (context: { topic: string, planningData: any, style: string }) => {
+export const synthesizeMasterScript = async (context: {
+  topic: string;
+  planningData: any;
+  style: string;
+  styleRules?: string;
+  benchmarkSummary?: string;
+  benchmarkPatterns?: string[];
+}) => {
+  const sys = [
+    buildStudioPersona({
+      role: 'Lead Scriptwriter for a YouTube channel with over 1 million subscribers',
+      domain: 'YouTube long-form scripting with high-retention storytelling',
+      style: context.style,
+    }),
+    LEAD_SCRIPTWRITER_INSTRUCTION.trim(),
+    'Reply with JSON only: { "master_script": string }.',
+    'master_script must be the full script text in Korean.',
+    'Do not output any keys other than master_script.',
+    context.styleRules ? `Style rules:\n${context.styleRules}` : '',
+  ].join('\n');
   const planning = context.planningData || {};
   const targetSec = targetDurationToSeconds(planning.targetDuration);
-  const charHint = targetDurationToCharHint(targetSec);
-
-  const sys = `${LEAD_SCRIPTWRITER_INSTRUCTION}\nReply with JSON only: { "master_script": string }. master_script is the full script text.`;
-  const durationRule = targetSec > 0
-    ? ` [CRITICAL] 목표 재생 시간은 ${planning.targetDuration}입니다. 반드시 그 길이를 넘지 않도록 분량을 맞춰 주세요. ${charHint}`
+  const durationGuide = targetSec > 0
+    ? `Target duration: ${planning.targetDuration} (~${targetSec}s). ${targetDurationToCharHint(targetSec)}`
     : '';
-  const prompt = `Topic: ${context.topic}. Style: ${context.style}. Planning: ${JSON.stringify(planning)}.${durationRule} Write the full master script. Include narration, timestamps/seconds (e.g. [0-3초]), music cues (e.g. 음악: ...), and screen directions (e.g. 화면: ...) as needed. Return JSON.`;
+
+  const benchmarkSummary = typeof context.benchmarkSummary === 'string' ? context.benchmarkSummary.trim() : '';
+  const benchmarkPatterns = Array.isArray(context.benchmarkPatterns) ? context.benchmarkPatterns.filter(Boolean) : [];
+  const prompt = [
+    `Topic: ${context.topic}.`,
+    `Style (user-selected): ${context.style}.`,
+    durationGuide ? durationGuide : '',
+    benchmarkSummary || benchmarkPatterns.length
+      ? `Benchmarking summary: ${benchmarkSummary || '(none)'}. Benchmarking patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}.`
+      : '',
+    `Planning (JSON): ${JSON.stringify(planning)}.`,
+    'Write the full master script in Korean.',
+    'Include narration and, when helpful, optional timestamps/seconds (e.g. [0-3초]), music cues (e.g. 음악: ...), and screen directions (e.g. 화면: ...).',
+    'Return JSON.',
+  ].filter(Boolean).join(' ');
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
     const parsed = safeJsonParse<{ master_script?: string }>(output, {});
@@ -189,10 +555,17 @@ export function sanitizeScriptSegment(raw: string): string {
 }
 
 export const splitScriptIntoScenes = async (fullScript: string) => {
-  const sys = `You split a script into scenes. Reply with JSON only: an array of { "script_segment": string, "scene_description": string }.
-Rules for script_segment:
-- Put ONLY the spoken narration (내레이션) that will be read aloud. No music cues, no timestamps, no visual directions.
-- Do NOT include: "음악: ...", "[0-3초]", "화면: ...", or similar. Those belong in scene_description or nowhere.`;
+  const sys = [
+    buildStudioPersona({
+      role: 'senior video editor and storyboard artist',
+      domain: 'storyboarding, beat mapping, and visual continuity for YouTube videos',
+    }),
+    'Reply with JSON only: an array of { "script_segment": string, "scene_description": string }.',
+    'Rules for script_segment:',
+    '- Put ONLY the spoken narration (내레이션) that will be read aloud. No music cues, no timestamps, no visual directions.',
+    '- Do NOT include: "음악: ...", "[0-3초]", "화면: ...", or similar. Those belong in scene_description or nowhere.',
+    'scene_description should describe the visual in English (can include timing/mood for the visual).',
+  ].join('\n');
   const prompt = `Split this script into scene items. Each item:
 - script_segment: ONLY the narration text (what the narrator says). No music, no seconds/timestamps, no "화면:" directions.
 - scene_description: visual prompt for image (can include timing/mood for the visual).
@@ -221,8 +594,15 @@ Script:\n${fullScript}\nReturn JSON array only.`;
  */
 export const analyzeReferenceImage = async (base64Image: string) => {
   void base64Image;
-  const sys = 'You describe the visual style of an image in one short sentence for use as an image generation prompt. Reply with plain text only.';
-  const prompt = 'Describe the style of this reference image in one concise sentence (lighting, mood, colors, composition). No preamble.';
+  const sys = [
+    buildStudioPersona({
+      role: 'senior art director and image prompt engineer',
+      domain: 'visual style analysis for image generation',
+    }),
+    'Describe the visual style of an image in one short sentence for use as an image generation prompt.',
+    'Reply with plain text only (English).',
+  ].join(' ');
+  const prompt = 'Describe the style of this reference image in one concise sentence (lighting, mood, colors, composition). No preamble. English only.';
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
     return (output || '').trim() || 'Minimal dark studio lighting, soft rim light, matte textures, premium cinematic mood.';
@@ -234,9 +614,27 @@ export const analyzeReferenceImage = async (base64Image: string) => {
 /**
  * 상세 이미지 프롬프트 생성
  */
-export const generateScenePrompt = async (narrative: string, styleDesc: string, referenceStyle: string) => {
-  const sys = 'You write a single image generation prompt (English). Reply with plain text only, no JSON.';
-  const prompt = `Narrative: ${narrative}. Style: ${styleDesc}. Reference: ${referenceStyle}. Write one detailed image prompt.`;
+export const generateScenePrompt = async (
+  narrative: string,
+  styleDesc: string,
+  referenceStyle: string,
+  benchmark?: { summary?: string; patterns?: string[] }
+) => {
+  const sys = [
+    buildStudioPersona({
+      role: 'senior cinematic prompt engineer',
+      domain: 'high-quality image generation prompts for consistent visual style',
+      style: styleDesc || referenceStyle,
+    }),
+    'You write a single image generation prompt in English.',
+    'Reply with plain text only (English), no JSON.',
+  ].join(' ');
+  const benchSummary = typeof benchmark?.summary === 'string' ? benchmark?.summary.trim() : '';
+  const benchPatterns = Array.isArray(benchmark?.patterns) ? benchmark?.patterns.filter(Boolean).slice(0, 12) : [];
+  const benchPart = benchSummary || benchPatterns.length
+    ? ` Benchmarking vibe: summary="${benchSummary || 'N/A'}"; patterns="${benchPatterns.length ? benchPatterns.join(' | ') : 'N/A'}". Reflect the vibe/patterns without copying verbatim.`
+    : '';
+  const prompt = `Narrative: ${narrative}. Style: ${styleDesc}. Reference: ${referenceStyle}.${benchPart} Write one detailed image prompt.`;
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
     return (output || '').trim() || `Cinematic frame, ${styleDesc}. ${referenceStyle}. Scene: ${narrative}`;
@@ -254,7 +652,8 @@ export const generateSceneImage = async (
   prompt: string,
   style: string,
   aspectRatio: '9:16' | '16:9',
-  model?: string
+  model?: string,
+  referenceImageUrl?: string
 ): Promise<string> => {
   const falModel = model || 'fal-ai/imagen4/preview';
   const promptWithNoText = (prompt || '').trim() + NO_TEXT_PROMPT_SUFFIX;
@@ -264,6 +663,7 @@ export const generateSceneImage = async (
       model: falModel,
       aspect_ratio: aspectRatio,
       num_images: 1,
+      ...(referenceImageUrl ? { reference_image_url: referenceImageUrl } : {}),
     });
     const url = images?.[0]?.url;
     if (url) return url;
@@ -289,8 +689,15 @@ export const generateMetaData = async (context: {
 }): Promise<GeneratedMeta> => {
   const topic = context.topic || '영상 주제';
   const duration = context.targetDuration || '1m';
-  const sys = 'You generate YouTube metadata. Reply with JSON only: { "title": string, "description": string, "pinnedComment": string }.';
-  const prompt = `Topic: ${topic}. Summary: ${context.summary || 'N/A'}. Duration: ${duration}. Generate title, description (with timeline and hashtags), and pinned comment. Return JSON.`;
+  const sys = [
+    buildStudioPersona({
+      role: 'YouTube growth strategist and SEO-focused metadata specialist',
+      domain: 'titles, descriptions, hashtags, and pinned comments optimized for retention and CTR',
+    }),
+    'Reply with JSON only: { "title": string, "description": string, "pinnedComment": string }.',
+    'All fields must be in Korean.',
+  ].join(' ');
+  const prompt = `Topic: ${topic}. Summary: ${context.summary || 'N/A'}. Duration: ${duration}. Generate title, description (with timeline and hashtags), and pinned comment in Korean. Return JSON.`;
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
     const parsed = safeJsonParse<GeneratedMeta>(output, {} as GeneratedMeta);
@@ -310,8 +717,15 @@ export const generateMetaData = async (context: {
  * 유튜브 썸네일을 분석하고, 그 스타일을 벤치마킹한 이미지 URL 생성
  */
 export const generateBenchmarkThumbnail = async (referenceThumbnailUrl: string): Promise<{ imageUrl: string; analysisSummary: string }> => {
-  const sys = 'You analyze a thumbnail and write one short sentence summarizing its style (composition, color, typography). Reply with plain text only.';
-  const prompt = `Analyze this thumbnail URL style: ${referenceThumbnailUrl}. One sentence summary.`;
+  const sys = [
+    buildStudioPersona({
+      role: 'senior YouTube thumbnail analyst and creative director',
+      domain: 'thumbnail composition, color, typography, and high-CTR visual patterns',
+    }),
+    'Analyze a thumbnail and write one short sentence summarizing its style (composition, color, typography).',
+    'Reply with plain text only in Korean.',
+  ].join(' ');
+  const prompt = `Analyze this thumbnail URL style: ${referenceThumbnailUrl}. One sentence summary in Korean.`;
   let analysisSummary = '레퍼런스 썸네일의 구도·색감·타이포 톤을 분석해 동일한 분위기의 벤치마킹 이미지를 생성했습니다.';
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
@@ -332,4 +746,27 @@ export const generateBenchmarkThumbnail = async (referenceThumbnailUrl: string):
     /* fallback */
   }
   return { imageUrl: createMockImage('벤치마킹 썸네일', '16:9'), analysisSummary };
+};
+
+export const translateToKorean = async (englishText: string): Promise<string> => {
+  const text = (englishText || '').trim();
+  if (!text) return '';
+  const sys = [
+    buildStudioPersona({
+      role: 'professional Korean-English translator and localization specialist',
+      domain: 'accurate, natural Korean translations for creative/technical prompts',
+    }),
+    'Translate the given text to natural Korean.',
+    'Preserve meaning, intent, and structure. Do not add new information.',
+    'Keep proper nouns and model/technical terms as-is when appropriate.',
+    'If the input is already Korean, return it as-is.',
+    'Reply with Korean text only.',
+  ].join(' ');
+  const prompt = `Text:\n${text}\n\nKorean translation only.`;
+  try {
+    const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+    return (output || '').trim().replace(/^```\w*\s*|\s*```$/g, '').trim();
+  } catch {
+    return '';
+  }
 };

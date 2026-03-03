@@ -22,12 +22,16 @@ async function request<T>(
   retryCount = 0
 ): Promise<T> {
   const url = path.startsWith('http') ? path : `${BASE}${path}`;
-  const { timeoutMs, ...init } = options;
-  const merged = {
-    ...init,
-    headers: { 'Content-Type': 'application/json', ...init.headers },
-  };
   try {
+    const { timeoutMs, ...init } = options;
+    const headers = new Headers(init.headers || {});
+    // Default JSON header unless we're sending FormData (browser sets the boundary).
+    const isForm = typeof FormData !== 'undefined' && init.body instanceof FormData;
+    if (!isForm && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+    const merged: RequestInit = { ...init, headers };
+
     const res = await fetchWithTimeout(url, { ...merged, timeoutMs });
     if (!res.ok) {
       const text = await res.text();
@@ -68,6 +72,8 @@ export const api = {
     request<T>(path, { method: 'GET', ...opts }),
   post: <T>(path: string, body: unknown, opts?: { timeoutMs?: number }) =>
     request<T>(path, { method: 'POST', body: JSON.stringify(body), ...opts }),
+  postForm: <T>(path: string, body: FormData, opts?: { timeoutMs?: number }) =>
+    request<T>(path, { method: 'POST', body, ...opts }),
   patch: <T>(path: string, body: unknown, opts?: { timeoutMs?: number }) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(body), ...opts }),
   delete: (path: string, opts?: { timeoutMs?: number }) =>

@@ -17,3 +17,4 @@ boto3
 pymupdf
 fal-client
 google-api-python-client>=2.0
+youtube-transcript-api>=0.6,<1

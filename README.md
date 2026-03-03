@@ -245,6 +245,7 @@ docker compose exec -T postgres psql -U weavai -d postgres -c "ALTER DATABASE we
    - 모델 선택(Gemini 2.5 Flash/Pro, GPT-4o 등) 후 메시지 입력·전송  
    - 응답은 비동기 처리, 완료 시 자동 갱신  
    - 같은 채팅방에서 **텍스트↔이미지 모드 토글**로 이미지 생성까지 공존
+   - (문서 RAG) 채팅방에서 PDF/HWP/HWPX 업로드 후 `@문서명`으로 질문하면, 답변 근거를 PDF 하이라이트로 확인 가능
 
 3. **이미지 생성**  
    - 모델 선택(Imagen 4, FLUX Pro v1.1 Ultra, Nano Banana 등) 후 프롬프트 입력·생성  
@@ -264,6 +265,8 @@ docker compose exec -T postgres psql -U weavai -d postgres -c "ALTER DATABASE we
 | GET | `/api/v1/sessions/` | 세션 목록 (`?kind=chat` \| `?kind=image` \| `?kind=studio`) |
 | POST | `/api/v1/sessions/` | 세션 생성 (`kind`, `title`) |
 | GET | `/api/v1/sessions/:id/` | 세션 상세 |
+| POST | `/api/v1/sessions/:id/upload/` | 문서 업로드(PDF/HWP/HWPX) 후 RAG 색인 (비동기) |
+| GET | `/api/v1/sessions/:id/documents/` | 업로드 문서 목록/상태 |
 | POST | `/api/v1/chat/complete/` | 채팅 전송 (비동기) |
 | POST | `/api/v1/chat/image/` | 이미지 생성 (비동기, 참조/첨부 이미지 지원) |
 | GET | `/api/v1/chat/job/:task_id/` | 비동기 작업 상태·결과 조회 |
@@ -280,11 +283,18 @@ docker compose exec -T postgres psql -U weavai -d postgres -c "ALTER DATABASE we
 | **backend/jobs/** | PDF 처리 등 백그라운드 작업 |
 | **backend/storage/** | S3/MinIO 업로드 (첨부·참조 이미지) |
 | **backend/tests/** | 프로젝트 테스트 (Docker에서만 실행) |
-| **frontend/** | React 19 + Vite 7 + TypeScript, Tailwind |
+| **frontend/** | React 19 + Vite 6 + TypeScript, Tailwind |
 | **frontend/src/components/studio/** | WEAV Studio UI (기획·대본·음성·영상·메타·썸네일) |
 | **infra/** | Docker Compose (postgres, redis, minio, api, worker, nginx) |
 | **Makefile** | Docker 명령 래퍼 (Mac/Linux) |
 | **compose.ps1 / compose.cmd** | Docker 명령 래퍼 (Windows) |
 | **00_docs/** | 프로젝트 프레임워크·참고 문서 |
 
-자세한 구성은 [00_docs/프로젝트_프레임워크.md](00_docs/프로젝트_프레임워크.md)를 참고하세요.
+자세한 구성은 아래 문서를 참고하세요.
+
+- [00_docs/프로젝트_프레임워크.md](00_docs/프로젝트_프레임워크.md): 기술 스택/디렉터리 구조 요약
+- `00_docs/Win&Mac_QuickStart_GuideLine.md`: Docker 기준 “내리고-올리고-마이그레이션-접속”만 있는 빠른 가이드
+- `00_docs/Learn_About_This_Project_E2E.pdf`: 3일 완주용 E2E 학습 문서(“내가 만든 것처럼” 설명/확장)
+  - 원본: `00_docs/Learn_About_This_Project_E2E.md`
+  - 비개발자용(7일): `00_docs/Learn_About_This_Project_E2E_Beginer.md`
+  - PDF 재생성: `./.venv/bin/python 00_docs/_tools/build_learn_pdf.py`
