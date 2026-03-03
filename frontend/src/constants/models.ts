@@ -2,11 +2,26 @@ import type { ChatModel, ImageModel } from '@/types';
 
 export const CHAT_MODELS: ChatModel[] = [
   { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google' },
-  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google' },
-  { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'OpenAI' },
-  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI' },
-  { id: 'openai/gpt-5-chat', name: 'GPT-5 Chat', provider: 'OpenAI' },
+  { id: 'openai/gpt-4.1', name: 'GPT-4.1', provider: 'OpenAI' },
+  { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'Anthropic' },
+  { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6', provider: 'Anthropic' },
+  { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'Anthropic' },
+  { id: 'meta-llama/llama-4-maverick', name: 'Llama 4 Maverick', provider: 'Meta' },
+  { id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B', provider: 'OpenAI' },
 ];
+
+export function normalizeChatModelId(modelId: string | null | undefined): string {
+  const raw = String(modelId ?? '').trim();
+  const aliases: Record<string, string> = {
+    'openai/gpt-5-chat': 'openai/gpt-4.1',
+    'openai/gpt-4o': 'openai/gpt-4.1',
+    'openai/gpt-4o-mini': 'openai/gpt-4.1',
+    'google/gemini-2.5-pro': 'google/gemini-2.5-flash',
+  };
+  const next = aliases[raw] ?? raw;
+  const supported = new Set(CHAT_MODELS.map((m) => m.id));
+  return supported.has(next) ? next : 'google/gemini-2.5-flash';
+}
 
 export const IMAGE_MODEL_ID_IMAGEN4 = 'fal-ai/imagen4/preview';
 export const IMAGE_MODEL_ID_FLUX = 'fal-ai/flux-pro/v1.1-ultra';
@@ -103,10 +118,12 @@ export const IMAGE_PROMPT_MAX_LENGTH = 10_000;
 /** 모델별 채팅 프롬프트 최대 길이 (없으면 공통값 사용) */
 export const CHAT_PROMPT_MAX_LENGTH_BY_MODEL: Record<string, number> = {
   'google/gemini-2.5-flash': 1_000_000,
-  'google/gemini-2.5-pro': 1_000_000,
-  'openai/gpt-4o': 128_000,
-  'openai/gpt-4o-mini': 128_000,
-  'openai/gpt-5-chat': 128_000,
+  'openai/gpt-4.1': 128_000,
+  'openai/gpt-oss-120b': 128_000,
+  'anthropic/claude-sonnet-4.6': 320_000,
+  'anthropic/claude-opus-4.6': 320_000,
+  'anthropic/claude-sonnet-4.5': 320_000,
+  'meta-llama/llama-4-maverick': 320_000,
 };
 
 /** 모델별 이미지 프롬프트 최대 길이 (없으면 공통값 사용) */

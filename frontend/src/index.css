@@ -1696,6 +1696,23 @@ select.text-black {
   --weav-chat-bg-contrast: 0.98;
   --weav-chat-bg-saturate: 1.06;
 }
+.weav-glass-bubble {
+  background: hsl(var(--card) / 0.52);
+  -webkit-backdrop-filter: blur(28px);
+  backdrop-filter: blur(28px);
+  box-shadow:
+    0 18px 60px hsl(var(--background) / 0.55),
+    inset 0 1px 0 hsl(var(--foreground) / 0.06);
+}
+
+/* Prevent long code lines from expanding chat bubbles */
+.weav-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.weav-markdown code {
+  max-width: 100%;
+}
 .weav-chat-bg::before,
 .weav-studio-bg::before {
   content: "";

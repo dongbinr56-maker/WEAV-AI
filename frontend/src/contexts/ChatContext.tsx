@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { chatApi } from '@/services/api/chatApi';
 import { useApp } from './AppContext';
-import { getDefaultImageOptions, type ImageGenOptions } from '@/constants/models';
+import { getDefaultImageOptions, normalizeChatModelId, type ImageGenOptions } from '@/constants/models';
 import type { DocumentItem } from '@/types';
 
 const POLL_INTERVAL = 800;
@@ -18,7 +18,10 @@ function loadModelsFromStorage(): SessionModels {
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, { chat: string; image: string }>;
     return Object.fromEntries(
-      Object.entries(parsed).map(([k, v]) => [Number(k), v])
+      Object.entries(parsed).map(([k, v]) => [
+        Number(k),
+        { ...v, chat: normalizeChatModelId(v?.chat) },
+      ])
     ) as SessionModels;
   } catch {
     return {};
@@ -35,7 +38,10 @@ function saveModelsToStorage(models: SessionModels) {
 
 function getStoredModels(stored: SessionModels | undefined, sessionId: number) {
   const s = stored?.[sessionId];
-  return { chat: s?.chat ?? DEFAULT_CHAT_MODEL, image: s?.image ?? DEFAULT_IMAGE_MODEL };
+  return {
+    chat: normalizeChatModelId(s?.chat ?? DEFAULT_CHAT_MODEL),
+    image: s?.image ?? DEFAULT_IMAGE_MODEL,
+  };
 }
 
 type RegenerateChatOptions = { model?: string; prompt?: string };
@@ -145,9 +151,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const getChatModel = useCallback((sessionId: number) => getStoredModels(modelBySessionRef.current, sessionId).chat, []);
   const getImageModel = useCallback((sessionId: number) => getStoredModels(modelBySessionRef.current, sessionId).image, []);
   const setChatModel = useCallback((sessionId: number, model: string) => {
+    const normalized = normalizeChatModelId(model);
     setModelBySession((prev) => ({
       ...prev,
-      [sessionId]: { ...getStoredModels(prev, sessionId), chat: model },
+      [sessionId]: { ...getStoredModels(prev, sessionId), chat: normalized },
     }));
   }, []);
   const setImageModel = useCallback((sessionId: number, model: string) => {

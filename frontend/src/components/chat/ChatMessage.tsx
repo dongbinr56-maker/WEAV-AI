@@ -114,23 +114,64 @@ export function ChatMessage({
         isUser ? 'animate-slide-in-right' : 'animate-slide-in-left'
       }`}
     >
-      <div className={`flex items-start gap-2 max-w-[85%] ${isUser ? 'flex-row' : ''}`}>
+      <div className={`flex items-start gap-2 w-full max-w-[85%] min-w-0 ${isUser ? 'flex-row' : ''}`}>
         <div
-          className={`rounded-xl px-4 py-2 border transition-colors duration-200 ${
+          className={`flex-1 min-w-0 rounded-xl px-4 py-2 border transition-colors duration-200 ${
             isUser
-              ? 'bg-primary/18 text-foreground border-primary/40'
-              : 'bg-card/52 text-foreground border-border/50 backdrop-blur-md'
+              ? 'weav-glass-bubble text-foreground border-primary/40'
+              : 'weav-glass-bubble text-foreground border-border/55'
           }`}
         >
           {isUser ? (
-            <p className="whitespace-pre-wrap">
+            <p className="whitespace-pre-wrap break-words">
               {renderWithDocLinks(message.content, documents, onSelectDocument)}
             </p>
           ) : (
-          <div className="prose prose-invert prose-sm max-w-none">
+          <div className="weav-markdown min-w-0 text-[15px] leading-7 tracking-[-0.01em] max-w-none">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
+                p({ children }) {
+                  return <p className="my-2 whitespace-pre-wrap break-words">{children}</p>;
+                },
+                h1({ children }) {
+                  return <h1 className="mt-4 mb-2 text-[17px] font-semibold leading-snug">{children}</h1>;
+                },
+                h2({ children }) {
+                  return <h2 className="mt-4 mb-2 text-[16px] font-semibold leading-snug">{children}</h2>;
+                },
+                h3({ children }) {
+                  return <h3 className="mt-3 mb-1.5 text-[15px] font-semibold leading-snug">{children}</h3>;
+                },
+                ul({ children }) {
+                  return <ul className="my-2 ml-5 list-disc space-y-1">{children}</ul>;
+                },
+                ol({ children }) {
+                  return <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>;
+                },
+                li({ children }) {
+                  return <li className="leading-7">{children}</li>;
+                },
+                hr() {
+                  return <hr className="my-4 border-border/60" />;
+                },
+                blockquote({ children }) {
+                  return (
+                    <blockquote className="my-3 border-l-2 border-border/70 pl-3 text-muted-foreground">
+                      {children}
+                    </blockquote>
+                  );
+                },
+                table({ children }) {
+                  return (
+                    <div className="my-3 max-w-full overflow-x-auto">
+                      <table className="w-full border-collapse">{children}</table>
+                    </div>
+                  );
+                },
+                strong({ children }) {
+                  return <strong className="font-semibold text-foreground">{children}</strong>;
+                },
                 a({ href, children, ...props }) {
                   if (href && href.startsWith('doc://')) {
                     const docId = Number(href.replace('doc://', ''));
@@ -150,18 +191,23 @@ export function ChatMessage({
                     </a>
                   );
                 },
-                code({ node, className, children, ...props }) {
+                code({ className, children, ...props }) {
                   const match = /language-(\w+)/.exec(className || '');
                   return match ? (
-                    <SyntaxHighlighter
-                      style={oneDark as any}
-                      language={match[1]}
-                      PreTag="div"
-                    >
-                      {String(children).replace(/\n$/, '')}
-                    </SyntaxHighlighter>
+                    <div className="my-3 max-w-full overflow-x-auto rounded-lg border border-border/60">
+                      <SyntaxHighlighter
+                        style={oneDark as any}
+                        language={match[1]}
+                        customStyle={{ margin: 0, background: 'transparent' }}
+                      >
+                        {String(children).replace(/\n$/, '')}
+                      </SyntaxHighlighter>
+                    </div>
                   ) : (
-                    <code className={className} {...props}>
+                    <code
+                      className="px-1.5 py-0.5 rounded-md bg-secondary/60 border border-border/60 text-[13px]"
+                      {...props}
+                    >
                       {children}
                     </code>
                   );

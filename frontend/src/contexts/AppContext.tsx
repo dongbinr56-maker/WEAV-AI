@@ -11,6 +11,7 @@ type AppContextValue = {
   createSession: (kind: 'chat' | 'image' | 'studio', title?: string) => Promise<Session>;
   patchSession: (id: number, data: { title?: string; reference_image_urls?: string[] }) => Promise<void>;
   deleteSession: (id: number) => Promise<void>;
+  deleteSessions: (ids: number[]) => Promise<{ deletedIds: number[]; failedIds: number[] }>;
   refreshCurrent: () => Promise<void>;
   /** 해당 세션만 갱신. 현재 선택된 세션이면 currentSession도 갱신하고 true 반환, 아니면 목록만 갱신하고 false 반환 */
   refreshSession: (sessionId: number) => Promise<boolean>;
@@ -127,6 +128,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const deleteSessions = useCallback(async (ids: number[]) => {
+    const normalized = Array.from(new Set(ids)).filter((v) => Number.isFinite(v) && v > 0);
+    if (normalized.length === 0) return { deletedIds: [], failedIds: [] };
+
+    const res = await sessionApi.bulkDelete(normalized);
+    const failed = new Set<number>([...(res.not_found ?? []), ...(res.forbidden ?? [])]);
+    const deletedIds = normalized.filter((id) => !failed.has(id));
+    const deletedSet = new Set(deletedIds);
+
+    setSessions((prev) => prev.filter((s) => !deletedSet.has(s.id)));
+    setCurrentSession((curr) => (curr && deletedSet.has(curr.id) ? null : curr));
+    const last = readLastSessionId();
+    if (last != null && deletedSet.has(last)) {
+      writeLastSessionId(null);
+    }
+    return { deletedIds, failedIds: Array.from(failed) };
+  }, []);
+
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
@@ -140,6 +159,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     createSession,
     patchSession,
     deleteSession,
+    deleteSessions,
     refreshCurrent,
     refreshSession,
   };

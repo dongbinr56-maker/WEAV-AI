@@ -242,7 +242,7 @@ docker compose exec -T postgres psql -U weavai -d postgres -c "ALTER DATABASE we
    - 채팅·이미지·스튜디오 세션 목록에서 기존 세션 선택
 
 2. **채팅**  
-   - 모델 선택(Gemini 2.5 Flash/Pro, GPT-4o 등) 후 메시지 입력·전송  
+   - 모델 선택(Gemini 2.5 Flash, GPT-4.1, Claude Sonnet/Opus 4.6, Llama 4 Maverick 등) 후 메시지 입력·전송  
    - 응답은 비동기 처리, 완료 시 자동 갱신  
    - 같은 채팅방에서 **텍스트↔이미지 모드 토글**로 이미지 생성까지 공존
    - (문서 RAG) 채팅방에서 PDF/HWP/HWPX 업로드 후 `@문서명`으로 질문하면, 답변 근거를 PDF 하이라이트로 확인 가능

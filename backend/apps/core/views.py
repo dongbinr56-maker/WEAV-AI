@@ -36,6 +36,7 @@ YOUTUBE_WATCH_USER_AGENT = (
 )
 _YOUTUBE_ID_RE = re.compile(r'^[a-zA-Z0-9_-]{11}$')
 YOUTUBE_BENCHMARK_MAX_DURATION_SECONDS = 40 * 60
+YOUTUBE_TRANSCRIPT_MAX_CHARS = 40_000
 
 
 def health(request):
@@ -164,6 +165,18 @@ def _fetch_youtube_watch_details(video_id: str) -> dict:
 
 
 def _fetch_youtube_transcript(video_id: str):
+    def _format_ts(seconds: float | int | None) -> str:
+        try:
+            sec = int(float(seconds or 0))
+        except Exception:
+            sec = 0
+        h = sec // 3600
+        m = (sec % 3600) // 60
+        s = sec % 60
+        if h > 0:
+            return f'{h:02d}:{m:02d}:{s:02d}'
+        return f'{m:02d}:{s:02d}'
+
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
     except Exception:
@@ -180,9 +193,12 @@ def _fetch_youtube_transcript(video_id: str):
         text = str(item.get('text') or '').replace('\n', ' ').strip()
         if not text:
             continue
-        chunks.append(text)
-        total_len += len(text) + 1
-        if total_len >= 6000:
+        # Include timestamps so the model can reference the full timeline accurately.
+        ts = _format_ts(item.get('start'))
+        line = f'[{ts}] {text}'
+        chunks.append(line)
+        total_len += len(line) + 1
+        if total_len >= YOUTUBE_TRANSCRIPT_MAX_CHARS:
             break
     return ' '.join(chunks).strip()
 
@@ -246,153 +262,40 @@ def _gemini_extract_text(response_data: dict) -> str:
     return ''
 
 
-def _gemini_generate_json(prompt: str, system_prompt: str, model: str | None = None) -> dict:
-    api_key = config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
-    if not api_key:
-        raise RuntimeError('GEMINI_API_KEY (or GOOGLE_API_KEY) not configured')
-
-    model_name = (model or config('GEMINI_BENCHMARK_MODEL', default='gemini-2.5-flash') or 'gemini-2.5-flash').strip()
-    url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent'
-
-    payload = {
-        'systemInstruction': {
-            'parts': [{'text': system_prompt}],
-        },
-        'contents': [{
-            'role': 'user',
-            'parts': [{'text': prompt}],
-        }],
-        'generationConfig': {
-            'temperature': 0.2,
-            'responseMimeType': 'application/json',
-            'responseJsonSchema': {
-                'type': 'object',
-                'properties': {
-                    'summary': {'type': 'string'},
-                    'patterns': {
-                        'type': 'array',
-                        'items': {'type': 'string'},
-                    },
-                },
-                'required': ['summary', 'patterns'],
-            },
-        },
-    }
-    r = requests.post(
-        url,
-        headers={
-            'Content-Type': 'application/json',
-            'x-goog-api-key': api_key,
-        },
-        json=payload,
-        timeout=90,
-    )
-    if not r.ok:
-        try:
-            err = r.json().get('error') or {}
-            msg = err.get('message') or str(err)
-        except Exception:
-            msg = r.text or r.reason or f'HTTP {r.status_code}'
-        raise RuntimeError(f'Gemini API 요청 실패 ({r.status_code}): {msg}')
-
-    data = r.json()
-    text = _gemini_extract_text(data)
-    if not text:
-        raise RuntimeError('Gemini API 응답에서 텍스트를 찾지 못했습니다.')
-    try:
-        return json.loads(text)
-    except Exception:
-        # 일부 응답이 코드펜스나 문자열 래핑을 포함할 수 있어 방어적으로 정리
-        cleaned = text.strip()
-        cleaned = re.sub(r'^```json\s*', '', cleaned)
-        cleaned = re.sub(r'^```\s*', '', cleaned)
-        cleaned = re.sub(r'\s*```$', '', cleaned)
-        return json.loads(cleaned)
-
-
 def _gemini_generate_dual_benchmark_json(prompt: str, system_prompt: str, model: str | None = None) -> dict:
     """
-    Gemini JSON output with two sections:
-    - content: 상세 내용 요약/핵심 포인트
-    - delivery: 전개/패턴(벤치마킹 포인트)
+    Dual benchmark JSON via fal OpenRouter LLM (openrouter/router).
     """
-    api_key = config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
-    if not api_key:
-        raise RuntimeError('GEMINI_API_KEY (or GOOGLE_API_KEY) not configured')
-
-    model_name = (model or config('GEMINI_BENCHMARK_MODEL', default='gemini-2.5-flash') or 'gemini-2.5-flash').strip()
-    url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent'
-
-    payload = {
-        'systemInstruction': {
-            'parts': [{'text': system_prompt}],
-        },
-        'contents': [{
-            'role': 'user',
-            'parts': [{'text': prompt}],
-        }],
-        'generationConfig': {
-            'temperature': 0.2,
-            'responseMimeType': 'application/json',
-            'responseJsonSchema': {
-                'type': 'object',
-                'properties': {
-                    'content': {
-                        'type': 'object',
-                        'properties': {
-                            'summary': {'type': 'string'},
-                            'keyPoints': {
-                                'type': 'array',
-                                'items': {'type': 'string'},
-                            },
-                        },
-                        'required': ['summary', 'keyPoints'],
-                    },
-                    'delivery': {
-                        'type': 'object',
-                        'properties': {
-                            'summary': {'type': 'string'},
-                            'patterns': {
-                                'type': 'array',
-                                'items': {'type': 'string'},
-                            },
-                        },
-                        'required': ['summary', 'patterns'],
-                    },
-                },
-                'required': ['content', 'delivery'],
-            },
-        },
-    }
-    r = requests.post(
-        url,
-        headers={
-            'Content-Type': 'application/json',
-            'x-goog-api-key': api_key,
-        },
-        json=payload,
-        timeout=90,
-    )
-    if not r.ok:
-        try:
-            err = r.json().get('error') or {}
-            msg = err.get('message') or str(err)
-        except Exception:
-            msg = r.text or r.reason or f'HTTP {r.status_code}'
-        raise RuntimeError(f'Gemini API 요청 실패 ({r.status_code}): {msg}')
-
-    data = r.json()
-    text = _gemini_extract_text(data)
-    if not text:
-        raise RuntimeError('Gemini API 응답에서 텍스트를 찾지 못했습니다.')
     try:
-        return json.loads(text)
-    except Exception:
+        from apps.ai.fal_client import chat_completion
+        from apps.ai.errors import FALError
+    except Exception as e:
+        raise RuntimeError(f'LLM 모듈을 불러오지 못했습니다: {e}')
+
+    model_name = (model or 'google/gemini-2.5-flash').strip() or 'google/gemini-2.5-flash'
+    # Backward-compat: accept bare Gemini ids used by older clients.
+    if '/' not in model_name and model_name.startswith('gemini-'):
+        model_name = f'google/{model_name}'
+
+    try:
+        text = chat_completion(prompt, model=model_name, system_prompt=system_prompt, temperature=0.2, max_tokens=4096)
+    except FALError as e:
+        raise RuntimeError(str(e))
+    except Exception as e:
+        raise RuntimeError(f'LLM 요청 실패: {e}')
+
+    try:
         cleaned = text.strip()
         cleaned = re.sub(r'^```json\s*', '', cleaned)
         cleaned = re.sub(r'^```\s*', '', cleaned)
         cleaned = re.sub(r'\s*```$', '', cleaned)
+        start = cleaned.find('{')
+        end = cleaned.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start:end + 1]
         return json.loads(cleaned)
+    except Exception:
+        raise RuntimeError('LLM 응답 JSON 파싱에 실패했습니다.')
 
 
 def _gemini_generate_youtube_url_dual_benchmark_json(
@@ -403,6 +306,7 @@ def _gemini_generate_youtube_url_dual_benchmark_json(
 ) -> dict:
     """
     Gemini Video Understanding (YouTube URL direct input) with dual benchmark JSON output.
+    (YouTube URL을 Gemini에 직접 넣는 기능은 OpenRouter가 아닌 Google Gemini API 경로입니다.)
     """
     api_key = config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
     if not api_key:
@@ -578,6 +482,7 @@ def _build_youtube_benchmark_prompt(ctx: dict) -> tuple[str, str]:
         '다음 유튜브 영상의 실제 수집 데이터(제목/채널/설명/자막)를 바탕으로 영상 구조와 패턴을 분석해주세요.',
         '중요: 제공된 데이터에 없는 내용을 추측하지 마세요.',
         '자막이 없으면 "메타데이터 기반 분석"임을 summary에 명시하고, 패턴도 일반적인 편집/구성 레벨로만 작성하세요.',
+        '자막이 길면 일부만 제공될 수 있습니다. 제공된 자막 범위를 넘어서는 타임라인/내용은 단정하지 마세요.',
         '응답은 JSON만 허용됩니다: { "summary": string, "patterns": string[] }',
         '',
         f'원본 URL: {ctx.get("url") or "(없음)"}',
@@ -585,7 +490,7 @@ def _build_youtube_benchmark_prompt(ctx: dict) -> tuple[str, str]:
         f'채널: {ctx.get("channel") or "(없음)"}',
         f'설명: {(ctx.get("description") or "(없음)")[:3000]}',
         f'자막 사용 가능 여부: {"있음" if ctx.get("hasTranscript") else "없음"}',
-        f'자막(일부): {(ctx.get("transcript") or "(없음)")[:6000]}',
+        f'자막(일부): {(ctx.get("transcript") or "(없음)")[:YOUTUBE_TRANSCRIPT_MAX_CHARS]}',
     ])
     return system_prompt, prompt
 
@@ -639,6 +544,7 @@ def _build_youtube_benchmark_dual_prompt(ctx: dict) -> tuple[str, str]:
         '- delivery.patterns: 벤치마킹 포인트 6~12개 (훅/전개/편집/자막/내레이션/결말/CTA)',
         '',
         '중요: 제공된 데이터에 없는 내용은 추측하지 마세요. 자막이 없으면 content.summary에 "메타데이터 기반 분석"임을 명시하세요.',
+        '자막이 길면 일부만 제공될 수 있습니다. 제공된 자막 범위를 넘어서는 타임라인/내용은 단정하지 마세요.',
         '응답은 JSON만 허용됩니다: { "content": { "summary": string, "keyPoints": string[] }, "delivery": { "summary": string, "patterns": string[] } }',
         '',
         f'원본 URL: {ctx.get("url") or "(없음)"}',
@@ -646,7 +552,7 @@ def _build_youtube_benchmark_dual_prompt(ctx: dict) -> tuple[str, str]:
         f'채널: {ctx.get("channel") or "(없음)"}',
         f'설명: {(ctx.get("description") or "(없음)")[:3000]}',
         f'자막 사용 가능 여부: {"있음" if ctx.get("hasTranscript") else "없음"}',
-        f'자막(일부): {(ctx.get("transcript") or "(없음)")[:6000]}',
+        f'자막(일부): {(ctx.get("transcript") or "(없음)")[:YOUTUBE_TRANSCRIPT_MAX_CHARS]}',
     ])
     return system_prompt, prompt
 
@@ -687,7 +593,9 @@ def _build_youtube_video_benchmark_dual_prompt(ctx: dict) -> tuple[str, str]:
 @require_http_methods(['POST'])
 def studio_youtube_benchmark_analyze(request):
     """
-    Google AI Studio Gemini를 직접 사용한 유튜브 URL 벤치마킹 분석.
+    유튜브 URL 벤치마킹 분석.
+    - 1) (옵션) Gemini Video Understanding: YouTube URL을 직접 넣어 "영상 자체" 분석
+    - 2) 실패/비활성화 시: 메타데이터/자막 기반 분석(LLM)
     POST JSON: { url, model? } -> { summary, patterns, meta }
     """
     body = _parse_json_body(request)
@@ -723,15 +631,36 @@ def studio_youtube_benchmark_analyze(request):
         return JsonResponse({'error': '유튜브 영상의 제목/설명/자막을 가져오지 못했습니다.'}, status=502)
 
     requested_model = body.get('model')
-    direct_video_enabled = str(config('GEMINI_BENCHMARK_USE_YOUTUBE_URL', default='true')).strip().lower() not in ('0', 'false', 'no', 'off')
-    allow_metadata_fallback = str(config('GEMINI_BENCHMARK_ALLOW_METADATA_FALLBACK', default='false')).strip().lower() in ('1', 'true', 'yes', 'on')
+    direct_video_enabled = str(config('GEMINI_BENCHMARK_USE_YOUTUBE_URL', default='true')).strip().lower() not in (
+        '0',
+        'false',
+        'no',
+        'off',
+    )
+    allow_metadata_fallback = str(config('GEMINI_BENCHMARK_ALLOW_METADATA_FALLBACK', default='false')).strip().lower() in (
+        '1',
+        'true',
+        'yes',
+        'on',
+    )
     direct_video_error = ''
+    has_gemini_key = bool(
+        (config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip())
+    )
+    if direct_video_enabled and not has_gemini_key:
+        # 키가 없으면 direct video 시도 자체를 건너뛰고 메타데이터/자막 기반 분석으로 진행.
+        direct_video_enabled = False
 
     # 1) Try official Gemini YouTube URL video analysis first (video understanding preview feature).
     if direct_video_enabled:
         try:
             video_sys, video_prompt = _build_youtube_video_benchmark_dual_prompt(ctx)
-            parsed = _gemini_generate_youtube_url_dual_benchmark_json(ctx.get('url') or raw_url, video_prompt, video_sys, model=requested_model)
+            parsed = _gemini_generate_youtube_url_dual_benchmark_json(
+                ctx.get('url') or raw_url,
+                video_prompt,
+                video_sys,
+                model=requested_model,
+            )
             content = parsed.get('content') if isinstance(parsed, dict) else None
             delivery = parsed.get('delivery') if isinstance(parsed, dict) else None
 
@@ -756,6 +685,7 @@ def studio_youtube_benchmark_analyze(request):
             patterns = [str(p).strip() for p in patterns if str(p).strip()]
             if not patterns:
                 patterns = ['오프닝 훅 구성', '핵심 전개 리듬', '편집/자막/내레이션 패턴', '마무리 구조']
+
             return JsonResponse({
                 'summary': delivery_summary,
                 'patterns': patterns[:12],
@@ -772,7 +702,12 @@ def studio_youtube_benchmark_analyze(request):
                     'analysisMode': 'youtube-url-video',
                     'contentAnalysisMode': 'youtube-url-video',
                     'deliveryAnalysisMode': 'youtube-url-video',
-                    'model': (requested_model or config('GEMINI_BENCHMARK_VIDEO_MODEL', default='gemini-3-flash-preview') or 'gemini-3-flash-preview'),
+                    'directVideoAttempted': True,
+                    'model': (
+                        requested_model
+                        or config('GEMINI_BENCHMARK_VIDEO_MODEL', default='gemini-3-flash-preview')
+                        or 'gemini-3-flash-preview'
+                    ),
                     'hasTranscript': bool(ctx.get('hasTranscript')),
                     'durationSeconds': ctx.get('durationSeconds'),
                     'videoId': ctx.get('videoId') or '',
@@ -789,14 +724,14 @@ def studio_youtube_benchmark_analyze(request):
                     'error': f'Gemini YouTube URL 직접 영상 분석 실패: {direct_video_error}',
                     'meta': {
                         'provider': 'google-ai-studio',
-                    'analysisMode': 'youtube-url-video',
-                    'directVideoAttempted': True,
-                    'directVideoError': direct_video_error,
-                    'durationSeconds': ctx.get('durationSeconds'),
-                },
-            }, status=502)
+                        'analysisMode': 'youtube-url-video',
+                        'directVideoAttempted': True,
+                        'directVideoError': direct_video_error,
+                        'durationSeconds': ctx.get('durationSeconds'),
+                    },
+                }, status=502)
 
-    # 2) Fallback: metadata/transcript-grounded analysis
+    # 2) Fallback: metadata/transcript-grounded analysis (LLM)
     system_prompt, prompt = _build_youtube_benchmark_dual_prompt(ctx)
     try:
         parsed = _gemini_generate_dual_benchmark_json(prompt, system_prompt, model=requested_model)
@@ -857,13 +792,18 @@ def studio_youtube_benchmark_analyze(request):
             'patterns': patterns[:12],
         },
         'meta': {
-            'provider': 'google-ai-studio',
+            'provider': 'fal-openrouter',
             'analysisMode': 'metadata-transcript-fallback',
             'contentAnalysisMode': 'metadata-transcript-fallback',
             'deliveryAnalysisMode': 'metadata-transcript-fallback',
             'directVideoAttempted': bool(direct_video_enabled),
             'directVideoError': direct_video_error,
-            'model': (body.get('model') or config('GEMINI_BENCHMARK_MODEL', default='gemini-2.5-flash') or 'gemini-2.5-flash'),
+            'model': (
+                requested_model
+                or config('OPENROUTER_BENCHMARK_MODEL', default='google/gemini-2.5-flash')
+                or config('GEMINI_BENCHMARK_MODEL', default='google/gemini-2.5-flash')
+                or 'google/gemini-2.5-flash'
+            ),
             'hasTranscript': bool(ctx.get('hasTranscript')),
             'durationSeconds': ctx.get('durationSeconds'),
             'videoId': ctx.get('videoId') or '',

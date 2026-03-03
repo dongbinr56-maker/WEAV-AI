@@ -13,6 +13,7 @@ from apps.chats.serializers import MessageSerializer, ImageRecordSerializer
 from storage.s3 import minio_client
 from .schemas import TextGenerationRequest, ImageGenerationRequest
 from .router import (
+    normalize_chat_model,
     IMAGE_MODEL_GOOGLE,
     IMAGE_MODEL_FLUX,
     IMAGE_MODEL_KLING,
@@ -44,7 +45,7 @@ def complete_chat(request):
         task = tasks.task_chat.delay(
             job.id,
             prompt=body.prompt,
-            model=body.model or 'google/gemini-2.5-flash',
+            model=normalize_chat_model(body.model),
             system_prompt=body.system_prompt,
         )
         job.task_id = task.id
@@ -231,7 +232,7 @@ def regenerate_chat(request):
     task = tasks.task_chat.delay(
         job.id,
         prompt=prompt,
-        model=model,
+        model=normalize_chat_model(model),
         system_prompt=system_prompt,
     )
     job.task_id = task.id

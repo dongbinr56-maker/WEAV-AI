@@ -25,9 +25,11 @@ async function request<T>(
   try {
     const { timeoutMs, ...init } = options;
     const headers = new Headers(init.headers || {});
-    // Default JSON header unless we're sending FormData (browser sets the boundary).
+    const method = (init.method || 'GET').toUpperCase();
+    const hasBody = init.body != null && method !== 'GET' && method !== 'HEAD';
+    // Default JSON header only when sending a body (browser sets the boundary for FormData).
     const isForm = typeof FormData !== 'undefined' && init.body instanceof FormData;
-    if (!isForm && !headers.has('Content-Type')) {
+    if (hasBody && !isForm && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json');
     }
     const merged: RequestInit = { ...init, headers };

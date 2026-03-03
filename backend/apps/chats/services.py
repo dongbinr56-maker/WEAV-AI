@@ -27,7 +27,7 @@ class ChatMemoryService:
             os.environ.get("OPENROUTER_EMBEDDING_MODEL", "openai/text-embedding-3-small"),
         )
         self.rerank_enabled = os.environ.get("RERANK_ENABLED", "1") == "1"
-        self.rerank_model = os.environ.get("RERANK_MODEL", "openai/gpt-4o-mini")
+        self.rerank_model = os.environ.get("RERANK_MODEL", "openai/gpt-4.1")
         self.rerank_max_candidates = int(os.environ.get("RERANK_MAX_CANDIDATES", "24"))
         if api_key:
             self.client = OpenAI(

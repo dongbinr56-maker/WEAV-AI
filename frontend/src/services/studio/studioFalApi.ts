@@ -116,7 +116,7 @@ export async function studioYouTubeContext(url: string): Promise<StudioYouTubeCo
   return api.get<StudioYouTubeContext>(path);
 }
 
-/** YouTube benchmarking analysis via backend Google AI Studio Gemini. */
+/** YouTube benchmarking analysis (Gemini direct video + fallback). */
 export async function studioYouTubeBenchmarkAnalyze(url: string): Promise<StudioYouTubeBenchmarkAnalysis> {
   return api.post<StudioYouTubeBenchmarkAnalysis>(STUDIO_YOUTUBE_BENCHMARK_ANALYZE, { url });
 }
