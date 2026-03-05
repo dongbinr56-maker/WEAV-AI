@@ -34,6 +34,7 @@ FAL_GEMINI3_PRO_IMAGE_EDIT = 'fal-ai/gemini-3-pro-image-preview/edit'
 # Nano Banana Pro
 FAL_NANO_BANANA_PRO = 'fal-ai/nano-banana-pro'
 FAL_NANO_BANANA_PRO_EDIT = 'fal-ai/nano-banana-pro/edit'
+FAL_IMAGEUTILS_REMBG = 'fal-ai/imageutils/rembg'
 
 logger = logging.getLogger(__name__)
 
@@ -551,6 +552,37 @@ def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: st
             result.append(res)
 
     return result
+
+
+def remove_background_fal(image_url: str, crop_to_bbox: bool = False) -> dict:
+    """
+    fal.ai 배경 제거 (rembg).
+    input: image_url
+    output: {"url": "...", ...}
+    """
+    if not image_url or not isinstance(image_url, str):
+        raise FALError('image_url is required')
+    safe_url = _ensure_fal_reachable_image_url(image_url)
+    payload = {
+        'image_url': safe_url,
+        'crop_to_bbox': bool(crop_to_bbox),
+    }
+    if _fal_debug_enabled():
+        logger.info("fal request: endpoint=%s payload=%s", FAL_IMAGEUTILS_REMBG, _sanitize_payload(payload))
+    r = requests.post(f'{FAL_BASE}/{FAL_IMAGEUTILS_REMBG}', headers=_fal_headers(), json=payload, timeout=180)
+    if not r.ok:
+        msg = _extract_error_message(r)
+        if _fal_debug_enabled():
+            logger.error("fal error: endpoint=%s status=%s body=%s", FAL_IMAGEUTILS_REMBG, r.status_code, msg)
+        raise FALError(f'fal error {r.status_code}: {msg}')
+    data = r.json() if r.content else {}
+    image = data.get('image') if isinstance(data, dict) else None
+    if isinstance(image, dict) and image.get('url'):
+        return image
+    # Some fal endpoints return {"url": ...} directly
+    if isinstance(data, dict) and data.get('url'):
+        return data
+    raise FALError('rembg response missing image url')
 
 
 # MiniMax Speech 2.6 HD: Studio Step 5 TTS

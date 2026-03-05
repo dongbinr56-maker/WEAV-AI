@@ -1081,6 +1081,36 @@ def studio_image(request):
 
 
 @csrf_exempt
+@ratelimit(key='ip', rate='30/m', method='POST', block=False)
+@require_http_methods(['POST'])
+def studio_bg_remove(request):
+    """Studio Reference Step: background removal. POST JSON: { image_url, crop_to_bbox? } -> { image }."""
+    if (r := _check_ratelimit(request)):
+        return r
+    body = _parse_json_body(request)
+    if not body or not isinstance(body.get('image_url'), str):
+        return JsonResponse({'error': 'image_url (string) required'}, status=400)
+    image_url = (body.get('image_url') or '').strip()
+    if not image_url:
+        return JsonResponse({'error': 'image_url required'}, status=400)
+    crop_to_bbox = bool(body.get('crop_to_bbox', False))
+    try:
+        from apps.ai.fal_client import remove_background_fal
+        from apps.ai.errors import FALError
+    except ImportError as e:
+        logger.exception('studio_bg_remove import')
+        return JsonResponse({'error': str(e)}, status=503)
+    try:
+        image = remove_background_fal(image_url, crop_to_bbox=crop_to_bbox)
+        return JsonResponse({'image': image})
+    except FALError as e:
+        return JsonResponse({'error': str(e)}, status=502)
+    except Exception as e:
+        logger.exception('studio_bg_remove')
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
 @ratelimit(key='ip', rate='60/m', method='POST', block=False)
 @require_http_methods(['POST'])
 def studio_tts(request):

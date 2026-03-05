@@ -770,3 +770,26 @@ export const translateToKorean = async (englishText: string): Promise<string> =>
     return '';
   }
 };
+
+export const translateToEnglish = async (koreanText: string): Promise<string> => {
+  const text = (koreanText || '').trim();
+  if (!text) return '';
+  const sys = [
+    buildStudioPersona({
+      role: 'professional Korean-English translator and localization specialist',
+      domain: 'accurate, natural English translations for creative/technical prompts',
+    }),
+    'Translate the given text to natural English.',
+    'Preserve meaning, intent, and structure. Do not add new information.',
+    'Keep proper nouns and model/technical terms as-is when appropriate.',
+    'If the input is already English, return it as-is.',
+    'Reply with English text only.',
+  ].join(' ');
+  const prompt = `Text:\n${text}\n\nEnglish translation only.`;
+  try {
+    const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+    return (output || '').trim().replace(/^```\w*\s*|\s*```$/g, '').trim();
+  } catch {
+    return '';
+  }
+};

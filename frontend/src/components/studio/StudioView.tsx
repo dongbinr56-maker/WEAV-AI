@@ -9,14 +9,24 @@ import {
 	  MessageCircle, Zap, Hash, Compass, Sword, Microscope, Palette, Map, Film, Heart, Gift,
 	  Leaf, Smile, BarChart3, Box, CheckSquare, ImagePlus, ScanLine
 	} from 'lucide-react';
-import { StudioGlobalContextType, StudioScene, StudioScriptSegment, StudioAnalysisResult, StudioScriptPlanningData } from '@/types/studio';
-import { 
-  analyzeUrlPattern, generateTopics, generatePlanningStep, 
-  rewritePlanningStep, generateMasterPlan, splitMasterPlanToSteps,
-  synthesizeMasterScript, splitScriptIntoScenes, generateSceneImage,
-  analyzeReferenceImage, generateScenePrompt, generateMetaData, generateBenchmarkThumbnail, translateToKorean
-} from '@/services/studio/geminiService';
-import { studioTts, uploadStudioReferenceImage, studioExport, studioExportJobStatus, studioExportJobCancel } from '@/services/studio/studioFalApi';
+	import {
+	  StudioGlobalContextType,
+	  StudioScene,
+	  StudioScriptSegment,
+	  StudioAnalysisResult,
+	  StudioScriptPlanningData,
+	  type StudioReferenceMode,
+	  type StudioReferencePreset,
+	  type StudioReferenceState,
+	  type StudioReferenceView,
+	} from '@/types/studio';
+	import { 
+	  analyzeUrlPattern, generateTopics, generatePlanningStep, 
+	  rewritePlanningStep, generateMasterPlan, splitMasterPlanToSteps,
+	  synthesizeMasterScript, splitScriptIntoScenes, generateSceneImage,
+	  analyzeReferenceImage, generateScenePrompt, generateMetaData, generateBenchmarkThumbnail, translateToKorean, translateToEnglish
+	} from '@/services/studio/geminiService';
+	import { studioTts, studioImage, studioBgRemove, uploadStudioReferenceImage, studioExport, studioExportJobStatus, studioExportJobCancel } from '@/services/studio/studioFalApi';
 import { fetchTrendingByCategory, formatTrendingGrowth, type TrendingItemWithCategory } from '@/services/studio/trendingApi';
 import { InputDialog } from '@/components/ui/InputDialog';
 
@@ -38,7 +48,14 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
 	  const storageKey = sessionId != null ? `${STORAGE_KEY_PREFIX}_${sessionId}` : STORAGE_KEY_PREFIX;
 	  const stored = useMemo(() => loadStoredStudio(storageKey), [storageKey]);
 
-	  const [currentStep, setCurrentStep] = useState<number>(() => (stored && typeof stored.currentStep === 'number') ? stored.currentStep : 1);
+  const STEP_SCHEMA_VERSION = 2;
+  const storedStepSchemaVersion = (stored && typeof stored.stepSchemaVersion === 'number') ? stored.stepSchemaVersion : 1;
+  const [currentStep, setCurrentStep] = useState<number>(() => {
+    const raw = (stored && typeof stored.currentStep === 'number') ? stored.currentStep : 1;
+    // v1(기존): 1~9, v2: 1~10 (Step 4 Reference 추가)
+    if (storedStepSchemaVersion < STEP_SCHEMA_VERSION && raw >= 4) return raw + 1;
+    return raw;
+  });
 	  const [activeTags, setActiveTags] = useState<string[]>(() => Array.isArray(stored?.activeTags) ? stored.activeTags : []);
 	  const [urlInput, setUrlInput] = useState(() => (typeof stored?.urlInput === 'string') ? stored.urlInput : '');
 	  const [urlAnalysisData, setUrlAnalysisData] = useState<any>(() => (stored?.urlAnalysisData && typeof stored.urlAnalysisData === 'object') ? stored.urlAnalysisData : null);
@@ -53,10 +70,61 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
 
   const [masterScript, setMasterScript] = useState(() => (typeof stored?.masterScript === 'string') ? stored.masterScript : '');
   const [selectedStyle, setSelectedStyle] = useState(() => (typeof stored?.selectedStyle === 'string') ? stored.selectedStyle : 'Realistic');
-  const [referenceImage, setReferenceImage] = useState(() => (typeof stored?.referenceImage === 'string') ? stored.referenceImage : '');
-  const [referenceImageUrl, setReferenceImageUrl] = useState(() => (typeof stored?.referenceImageUrl === 'string') ? stored.referenceImageUrl : '');
-  const [analyzedStylePrompt, setAnalyzedStylePrompt] = useState(() => (typeof stored?.analyzedStylePrompt === 'string') ? stored.analyzedStylePrompt : '');
-  const [analyzedStylePromptKo, setAnalyzedStylePromptKo] = useState(() => (typeof stored?.analyzedStylePromptKo === 'string') ? stored.analyzedStylePromptKo : '');
+	  const [referenceImage, setReferenceImage] = useState(() => (typeof stored?.referenceImage === 'string') ? stored.referenceImage : '');
+	  const [referenceImageUrl, setReferenceImageUrl] = useState(() => (typeof stored?.referenceImageUrl === 'string') ? stored.referenceImageUrl : '');
+	  const [analyzedStylePrompt, setAnalyzedStylePrompt] = useState(() => (typeof stored?.analyzedStylePrompt === 'string') ? stored.analyzedStylePrompt : '');
+	  const [analyzedStylePromptKo, setAnalyzedStylePromptKo] = useState(() => (typeof stored?.analyzedStylePromptKo === 'string') ? stored.analyzedStylePromptKo : '');
+	  const [referenceState, setReferenceState] = useState<StudioReferenceState>(() => {
+	    const def: StudioReferenceState = {
+	      mode: 'REMOVE_BACKGROUND',
+	      nickname: '',
+	      preset: 'turnaround_sheet',
+	      style_target: '',
+	      must_keep: ['face', 'hair', 'colors'],
+	      may_change: [],
+	      identity_locks: { hair: '', eyes: '', outfit_silhouette: '', distinctive_marks: '' },
+	      palette: { primary: '', secondary: '', accent: '' },
+	      constraints: { must_not_have: ['text', 'watermark', 'logo', 'busy background', 'multiple characters'] },
+	      crop_to_bbox: false,
+	      metadata: null,
+	    };
+	    const raw = stored?.referenceState;
+	    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return def;
+	    const obj = raw as Record<string, unknown>;
+	    const mode = typeof obj.mode === 'string' ? obj.mode : def.mode;
+	    const preset = typeof obj.preset === 'string' ? obj.preset : def.preset;
+	    const identity = (obj.identity_locks && typeof obj.identity_locks === 'object' && !Array.isArray(obj.identity_locks)) ? obj.identity_locks as Record<string, unknown> : {};
+	    const palette = (obj.palette && typeof obj.palette === 'object' && !Array.isArray(obj.palette)) ? obj.palette as Record<string, unknown> : {};
+	    const constraints = (obj.constraints && typeof obj.constraints === 'object' && !Array.isArray(obj.constraints)) ? obj.constraints as Record<string, unknown> : {};
+	    const must_keep = Array.isArray(obj.must_keep) ? obj.must_keep : def.must_keep;
+	    const may_change = Array.isArray(obj.may_change) ? obj.may_change : def.may_change;
+	    return {
+	      mode: (['USE_EXISTING_CUTOUT', 'REMOVE_BACKGROUND', 'GENERATE_NEW', 'RESTYLE_REFERENCE'].includes(mode) ? mode : def.mode) as StudioReferenceMode,
+	      nickname: typeof obj.nickname === 'string' ? obj.nickname : def.nickname,
+	      preset: (['profile', 'turnaround_sheet', 'expressions', '3d_modeling', 'live2d', 'all'].includes(preset) ? preset : def.preset) as StudioReferencePreset,
+	      style_target: typeof obj.style_target === 'string' ? obj.style_target : def.style_target,
+	      must_keep: (must_keep as StudioReferenceState['must_keep']).filter(Boolean),
+	      may_change: (may_change as StudioReferenceState['may_change']).filter(Boolean),
+	      identity_locks: {
+	        hair: typeof identity.hair === 'string' ? identity.hair : def.identity_locks.hair,
+	        eyes: typeof identity.eyes === 'string' ? identity.eyes : def.identity_locks.eyes,
+	        outfit_silhouette: typeof identity.outfit_silhouette === 'string' ? identity.outfit_silhouette : def.identity_locks.outfit_silhouette,
+	        distinctive_marks: typeof identity.distinctive_marks === 'string' ? identity.distinctive_marks : def.identity_locks.distinctive_marks,
+	      },
+	      palette: {
+	        primary: typeof palette.primary === 'string' ? palette.primary : def.palette.primary,
+	        secondary: typeof palette.secondary === 'string' ? palette.secondary : def.palette.secondary,
+	        accent: typeof palette.accent === 'string' ? palette.accent : def.palette.accent,
+	      },
+	      constraints: {
+	        must_not_have: Array.isArray(constraints.must_not_have)
+	          ? (constraints.must_not_have as unknown[]).filter((v) => typeof v === 'string') as string[]
+	          : def.constraints.must_not_have,
+	      },
+	      crop_to_bbox: typeof obj.crop_to_bbox === 'boolean' ? obj.crop_to_bbox : def.crop_to_bbox,
+	      metadata: (obj.metadata && typeof obj.metadata === 'object' && !Array.isArray(obj.metadata)) ? obj.metadata as any : def.metadata,
+	    };
+	  });
 	  const [selectedVoicePresetId, setSelectedVoicePresetId] = useState(() => (typeof stored?.selectedVoicePresetId === 'string') ? stored.selectedVoicePresetId : 'ko-female-1');
 	  const [subtitlesEnabled, setSubtitlesEnabled] = useState(() => (typeof stored?.subtitlesEnabled === 'boolean') ? stored.subtitlesEnabled : true);
 	  const [burnInSubtitles, setBurnInSubtitles] = useState(() => (typeof stored?.burnInSubtitles === 'boolean') ? stored.burnInSubtitles : false);
@@ -116,26 +184,29 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
   });
 
 	  useEffect(() => {
-	    const data = {
-	      currentStep, activeTags, urlInput, urlAnalysisData, videoFormat, inputMode,
-	      descriptionInput, scenes, sceneDurations, scriptStyle, customScriptStyleText, scriptLength, planningData,
-	      selectedTopic, finalTopic, generatedTopics, masterPlan, masterScript, selectedStyle,
-	      referenceImage, referenceImageUrl, analyzedStylePrompt, analyzedStylePromptKo,
-	      selectedBenchmarkPatterns,
-	      selectedVoicePresetId, subtitlesEnabled, burnInSubtitles,
-	      videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData
-	    };
+			    const data = {
+	          stepSchemaVersion: STEP_SCHEMA_VERSION,
+			      currentStep, activeTags, urlInput, urlAnalysisData, videoFormat, inputMode,
+			      descriptionInput, scenes, sceneDurations, scriptStyle, customScriptStyleText, scriptLength, planningData,
+			      selectedTopic, finalTopic, generatedTopics, masterPlan, masterScript, selectedStyle,
+			      referenceImage, referenceImageUrl, analyzedStylePrompt, analyzedStylePromptKo,
+            referenceState,
+			      selectedBenchmarkPatterns,
+			      selectedVoicePresetId, subtitlesEnabled, burnInSubtitles,
+			      videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData
+		    };
 	    localStorage.setItem(storageKey, JSON.stringify(data));
 	  }, [
 	    storageKey,
 	    currentStep, activeTags, urlInput, urlAnalysisData, videoFormat, inputMode,
 	    descriptionInput, scenes, sceneDurations, scriptStyle, customScriptStyleText, scriptLength, planningData,
 	    selectedTopic, finalTopic, generatedTopics, masterPlan, masterScript, selectedStyle,
-	    referenceImage, referenceImageUrl, analyzedStylePrompt, analyzedStylePromptKo,
-	    selectedBenchmarkPatterns,
-	    selectedVoicePresetId, subtitlesEnabled, burnInSubtitles,
-	    videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData
-	  ]);
+		    referenceImage, referenceImageUrl, analyzedStylePrompt, analyzedStylePromptKo,
+        referenceState,
+		    selectedBenchmarkPatterns,
+		    selectedVoicePresetId, subtitlesEnabled, burnInSubtitles,
+		    videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData
+		  ]);
 
   const value = {
     sessionId,
@@ -167,9 +238,10 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
     selectedStyle, setSelectedStyle,
     referenceImage, setReferenceImage,
     referenceImageUrl, setReferenceImageUrl,
-    analyzedStylePrompt, setAnalyzedStylePrompt,
-	    analyzedStylePromptKo, setAnalyzedStylePromptKo,
-	    selectedVoicePresetId, setSelectedVoicePresetId,
+	    analyzedStylePrompt, setAnalyzedStylePrompt,
+		    analyzedStylePromptKo, setAnalyzedStylePromptKo,
+        referenceState, setReferenceState,
+		    selectedVoicePresetId, setSelectedVoicePresetId,
 	    subtitlesEnabled, setSubtitlesEnabled,
 	    burnInSubtitles, setBurnInSubtitles,
 	    videoUrl, setVideoUrl,
@@ -1057,7 +1129,7 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
               <p className="text-sm text-slate-600">
                 {reviewMode === 'architecture'
                   ? '작성된 파트를 검토한 뒤 통합 시나리오를 생성하세요.'
-                  : '말투와 흐름을 다듬고 시각화 단계로 이동합니다.'}
+                  : '말투와 흐름을 다듬고 레퍼런스 단계로 이동합니다.'}
               </p>
             </div>
 
@@ -1273,21 +1345,824 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
   );
 };
 
-// --- [Step 4: 이미지 및 대본 생성] ---
+// --- [Step 4: 레퍼런스] ---
+const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
+  const {
+    setReferenceImage, referenceImageUrl, setReferenceImageUrl,
+    analyzedStylePrompt, setAnalyzedStylePrompt, analyzedStylePromptKo, setAnalyzedStylePromptKo,
+    referenceState, setReferenceState,
+    setCurrentStep
+  } = useGlobal();
+
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [isImgDragging, setIsImgDragging] = useState(false);
+  const [isRefAnalyzing, setIsRefAnalyzing] = useState(false);
+  const [isWorking, setIsWorking] = useState(false);
+  const [workStatus, setWorkStatus] = useState<string | null>(null);
+  const [sourceImageUrl, setSourceImageUrl] = useState<string>('');
+  const [sourceFileName, setSourceFileName] = useState<string>('');
+  const [baseFrontUrl, setBaseFrontUrl] = useState<string>('');
+  const [baseFrontCutoutUrl, setBaseFrontCutoutUrl] = useState<string>('');
+  const [turnaroundUrls, setTurnaroundUrls] = useState<Partial<Record<StudioReferenceView, string>>>({});
+  const [turnaroundCutoutUrls, setTurnaroundCutoutUrls] = useState<Partial<Record<StudioReferenceView, string>>>({});
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const translatingRef = useRef(false);
+
+  const handleImgUpload = async (file: File) => {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64 = e.target?.result as string;
+      setReferenceImage(base64);
+      setSourceFileName(file?.name || '');
+      setIsRefAnalyzing(true);
+      try {
+        const uploaded = await uploadStudioReferenceImage(file);
+        setSourceImageUrl(uploaded.url);
+        // 기존 Visual Step 호환: 업로드만 했을 때는 URL을 유지
+        setReferenceImageUrl(uploaded.url);
+        try {
+          const styleText = await analyzeReferenceImage(base64);
+          setAnalyzedStylePrompt(styleText);
+          setAnalyzedStylePromptKo(await translateToKorean(styleText));
+          setReferenceState((p) => (p.style_target || '').trim() ? p : ({ ...p, style_target: styleText }));
+        } catch {
+          /* ignore */
+        }
+        showToast("레퍼런스 이미지 업로드 완료.");
+      } finally {
+        setIsRefAnalyzing(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  useEffect(() => {
+    if (translatingRef.current) return;
+    if (analyzedStylePrompt && !analyzedStylePromptKo) {
+      translatingRef.current = true;
+      translateToKorean(analyzedStylePrompt)
+        .then((ko) => {
+          if (ko) setAnalyzedStylePromptKo(ko);
+        })
+        .finally(() => {
+          translatingRef.current = false;
+        });
+    }
+  }, [analyzedStylePrompt, analyzedStylePromptKo, setAnalyzedStylePromptKo]);
+
+  const styleTags = useMemo(() => {
+    const t = (referenceState.style_target || '').trim();
+    if (!t) return [];
+    return t.split(/[,\n]/g).map(s => s.trim()).filter(Boolean).slice(0, 12);
+  }, [referenceState.style_target]);
+
+  const normalizeHexColor = useCallback((value: string) => {
+    const v = (value || '').trim();
+    if (!v) return null;
+    const m = v.match(/^#?([0-9a-fA-F]{6})$/);
+    if (!m) return null;
+    return `#${m[1].toUpperCase()}`;
+  }, []);
+
+  const safeColorInputValue = useCallback((value: string) => normalizeHexColor(value) ?? '#000000', [normalizeHexColor]);
+
+  const containsKorean = useCallback((text: string) => /[가-힣]/.test(text || ''), []);
+
+	  const viewKo: Record<StudioReferenceView, string> = {
+	    front: '정면',
+	    side_right: '옆모습(오른쪽)',
+	    back: '뒷모습',
+	    three_quarter_front: '3/4 정면',
+	  };
+
+	  const mustKeepOptions = ['face', 'hair', 'outfit', 'colors', 'body_type', 'accessories'] as const;
+	  const mayChangeOptions = ['outfit', 'colors', 'hairstyle', 'accessories', 'material', 'mood'] as const;
+	  const mustKeepLabel: Record<(typeof mustKeepOptions)[number], string> = {
+	    face: '얼굴',
+	    hair: '헤어',
+	    outfit: '의상',
+	    colors: '색감',
+	    body_type: '체형',
+	    accessories: '액세서리',
+	  };
+	  const mayChangeLabel: Record<(typeof mayChangeOptions)[number], string> = {
+	    outfit: '의상',
+	    colors: '색감',
+	    hairstyle: '헤어스타일',
+	    accessories: '액세서리',
+	    material: '소재/재질',
+	    mood: '분위기',
+	  };
+
+	  const conflictMustToMay: Partial<Record<(typeof mustKeepOptions)[number], Array<(typeof mayChangeOptions)[number]>>> = {
+	    hair: ['hairstyle'],
+	    outfit: ['outfit'],
+	    colors: ['colors'],
+	    accessories: ['accessories'],
+	  };
+	  const conflictMayToMust: Partial<Record<(typeof mayChangeOptions)[number], Array<(typeof mustKeepOptions)[number]>>> = {
+	    hairstyle: ['hair'],
+	    outfit: ['outfit'],
+	    colors: ['colors'],
+	    accessories: ['accessories'],
+	  };
+
+	  const downloadJson = useCallback((filename: string, obj: unknown) => {
+	    try {
+	      const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+	      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      showToast('JSON 다운로드에 실패했습니다.');
+    }
+  }, [showToast]);
+
+	  const runPipeline = useCallback(async () => {
+	    const nickname = (referenceState.nickname || '').trim();
+	    if (!nickname) return showToast('캐릭터 별명을 입력해 주세요.');
+
+	    setIsWorking(true);
+	    setWorkStatus('준비 중...');
+	    try {
+      const styleTargetRaw = (referenceState.style_target || '').trim();
+      const locksRaw = referenceState.identity_locks;
+      const styleTargetEn =
+        styleTargetRaw && containsKorean(styleTargetRaw) ? (await translateToEnglish(styleTargetRaw)) || styleTargetRaw : styleTargetRaw;
+      const locksEn = {
+        hair: locksRaw.hair && containsKorean(locksRaw.hair) ? (await translateToEnglish(locksRaw.hair)) || locksRaw.hair : locksRaw.hair,
+        eyes: locksRaw.eyes && containsKorean(locksRaw.eyes) ? (await translateToEnglish(locksRaw.eyes)) || locksRaw.eyes : locksRaw.eyes,
+        outfit_silhouette: locksRaw.outfit_silhouette && containsKorean(locksRaw.outfit_silhouette)
+          ? (await translateToEnglish(locksRaw.outfit_silhouette)) || locksRaw.outfit_silhouette
+          : locksRaw.outfit_silhouette,
+        distinctive_marks: locksRaw.distinctive_marks && containsKorean(locksRaw.distinctive_marks)
+          ? (await translateToEnglish(locksRaw.distinctive_marks)) || locksRaw.distinctive_marks
+          : locksRaw.distinctive_marks,
+      };
+
+	      const preset = referenceState.preset;
+	      const wantsTurnaround = preset === 'turnaround_sheet' || preset === 'all';
+	      const views: StudioReferenceView[] = ['front', 'side_right', 'back', 'three_quarter_front'];
+	      const model = 'fal-ai/gemini-3-pro-image-preview';
+	      const aspectRatio = '9:16';
+
+	      const mustKeepEnLabel: Record<(typeof mustKeepOptions)[number], string> = {
+	        face: 'face',
+	        hair: 'hair',
+	        outfit: 'outfit',
+	        colors: 'colors',
+	        body_type: 'body type',
+	        accessories: 'accessories',
+	      };
+	      const mayChangeEnLabel: Record<(typeof mayChangeOptions)[number], string> = {
+	        outfit: 'outfit',
+	        colors: 'colors',
+	        hairstyle: 'hairstyle',
+	        accessories: 'accessories',
+	        material: 'materials/textures',
+	        mood: 'mood/atmosphere',
+	      };
+
+	      const buildPromptEn = (view: StudioReferenceView) => {
+	        const persona = [
+	          'You are a senior avatar/character reference artist and production designer.',
+	          'You specialize in creating consistent, reusable character reference assets for generative image models.',
+	          'Prioritize consistency over novelty.',
+	        ].join(' ');
+	        const viewToken =
+	          view === 'front' ? 'front view' :
+	          view === 'side_right' ? 'right side profile view (facing right)' :
+	          view === 'back' ? 'back view' :
+	          'three-quarter front view';
+	        const palette = referenceState.palette;
+        const lockParts = [
+          locksEn.hair ? `hair: ${locksEn.hair}` : null,
+          locksEn.eyes ? `eyes: ${locksEn.eyes}` : null,
+          locksEn.outfit_silhouette ? `outfit silhouette: ${locksEn.outfit_silhouette}` : null,
+          locksEn.distinctive_marks ? `distinctive marks: ${locksEn.distinctive_marks}` : null,
+        ].filter(Boolean).join('; ');
+	        const paletteParts = [
+	          palette.primary ? `primary ${palette.primary}` : null,
+	          palette.secondary ? `secondary ${palette.secondary}` : null,
+	          palette.accent ? `accent ${palette.accent}` : null,
+	        ].filter(Boolean).join(', ');
+	        const variationPolicy = referenceState.mode === 'RESTYLE_REFERENCE'
+	          ? [
+	              `Identity policy: must keep ${referenceState.must_keep.map((k) => mustKeepEnLabel[k]).join(', ') || 'identity'}.`,
+	              `May change ${referenceState.may_change.map((k) => mayChangeEnLabel[k]).join(', ') || 'nothing'} only when it does not break identity.`,
+	            ].join(' ')
+	          : null;
+	        const modeIntent = referenceState.mode === 'RESTYLE_REFERENCE'
+	          ? 'Restyle the same character while preserving identity.'
+	          : 'Create a clean character reference suitable as a reusable reference.'
+	        const positive = [
+	          persona,
+	          modeIntent,
+	          'single character',
+	          'full body',
+	          'orthographic-like',
+	          'consistent scale',
+	          viewToken,
+	          'clean plain white background',
+	          'no text, no watermark',
+	          'same character, consistent identity',
+	          styleTargetEn ? `style target: ${styleTargetEn}` : 'style target: clean studio render, neutral lighting, simple shading',
+	          lockParts ? `identity locks: ${lockParts}` : null,
+	          paletteParts ? `palette: ${paletteParts}` : null,
+	          variationPolicy,
+	        ].filter(Boolean).join('. ');
+	        const negative = 'extra limbs, extra fingers, deformed hands, inconsistent face, different outfit, multiple characters, text, watermark, logo, cropped head, cropped feet, extreme perspective, busy background';
+	        return `${positive}. Avoid: ${negative}.`;
+	      };
+
+      const setMeta = (partial: any) => {
+        const meta = {
+          nickname,
+          preset,
+          style_tags: styleTags,
+          identity_locks: referenceState.identity_locks,
+          palette: referenceState.palette,
+          constraints: referenceState.constraints,
+          allowed_variations: { must_keep: referenceState.must_keep, may_change: referenceState.may_change },
+          generated_assets: {
+            source_image_url: sourceImageUrl || undefined,
+            base_front_url: baseFrontUrl || undefined,
+            base_front_cutout_url: baseFrontCutoutUrl || undefined,
+            turnaround_urls: turnaroundUrls,
+            turnaround_cutout_urls: turnaroundCutoutUrls,
+          },
+          ...partial,
+        };
+        setReferenceState((p) => ({ ...p, metadata: meta }));
+        return meta;
+      };
+
+      if (referenceState.mode === 'USE_EXISTING_CUTOUT') {
+        if (!sourceImageUrl) return showToast('컷아웃(투명 PNG 등) 이미지를 업로드해 주세요.');
+        setWorkStatus('컷아웃 레퍼런스 저장 중...');
+        setReferenceImageUrl(sourceImageUrl);
+        const meta = setMeta({ generated_assets: { source_image_url: sourceImageUrl, base_front_cutout_url: sourceImageUrl } });
+        showToast('레퍼런스가 저장되었습니다.');
+        downloadJson(`weav_reference_${nickname}.json`, meta);
+        return;
+      }
+
+      if (referenceState.mode === 'REMOVE_BACKGROUND') {
+        if (!sourceImageUrl) return showToast('배경 제거할 이미지를 업로드해 주세요.');
+        setWorkStatus('배경 제거 중...');
+        const { image } = await studioBgRemove(sourceImageUrl, { crop_to_bbox: referenceState.crop_to_bbox });
+        setBaseFrontCutoutUrl(image.url);
+        setReferenceImageUrl(image.url);
+        const meta = setMeta({ generated_assets: { source_image_url: sourceImageUrl, base_front_cutout_url: image.url } });
+        showToast('배경 제거가 완료되었습니다.');
+        downloadJson(`weav_reference_${nickname}.json`, meta);
+        return;
+      }
+
+      if (referenceState.mode === 'GENERATE_NEW') {
+        setWorkStatus('베이스(정면) 생성 중...');
+        const basePrompt = buildPromptEn('front');
+        const baseRes = await studioImage({ prompt: basePrompt, model, aspect_ratio: aspectRatio, num_images: 1 });
+        const url = baseRes.images?.[0]?.url;
+        if (!url) throw new Error('base image url missing');
+        setBaseFrontUrl(url);
+
+        setWorkStatus('베이스(정면) 배경 제거 중...');
+        const { image } = await studioBgRemove(url, { crop_to_bbox: referenceState.crop_to_bbox });
+        setBaseFrontCutoutUrl(image.url);
+        setReferenceImageUrl(image.url);
+
+        let nextTurnaround: Partial<Record<StudioReferenceView, string>> = {};
+        let nextTurnaroundCutouts: Partial<Record<StudioReferenceView, string>> = {};
+        if (wantsTurnaround) {
+          for (const v of views) {
+            if (v === 'front') continue;
+            setWorkStatus(`턴어라운드 생성 중... (${viewKo[v] || v})`);
+            const prompt = buildPromptEn(v);
+            const res = await studioImage({
+              prompt,
+              model,
+              aspect_ratio: aspectRatio,
+              num_images: 1,
+              reference_image_url: url,
+            });
+            const outUrl = res.images?.[0]?.url;
+            if (!outUrl) continue;
+            nextTurnaround = { ...nextTurnaround, [v]: outUrl };
+            setTurnaroundUrls(nextTurnaround);
+            try {
+              setWorkStatus(`턴어라운드 배경 제거 중... (${viewKo[v] || v})`);
+              const cut = await studioBgRemove(outUrl, { crop_to_bbox: referenceState.crop_to_bbox });
+              nextTurnaroundCutouts = { ...nextTurnaroundCutouts, [v]: cut.image.url };
+              setTurnaroundCutoutUrls(nextTurnaroundCutouts);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+
+        const meta = setMeta({
+          generated_assets: {
+            base_front_url: url,
+            base_front_cutout_url: image.url,
+            turnaround_urls: nextTurnaround,
+            turnaround_cutout_urls: nextTurnaroundCutouts,
+          },
+        });
+        showToast('레퍼런스 생성이 완료되었습니다.');
+        downloadJson(`weav_reference_${nickname}.json`, meta);
+        return;
+      }
+
+      if (referenceState.mode === 'RESTYLE_REFERENCE') {
+        if (!sourceImageUrl) return showToast('스타일 변경할 레퍼런스 이미지를 업로드해 주세요.');
+        const styleTarget = (referenceState.style_target || '').trim();
+        if (!styleTarget) return showToast('원하는 스타일 키워드를 입력해 주세요.');
+
+        setWorkStatus('배경 제거(전처리) 중...');
+        let refForEdit = sourceImageUrl;
+        try {
+          const cut = await studioBgRemove(sourceImageUrl, { crop_to_bbox: referenceState.crop_to_bbox });
+          refForEdit = cut.image.url;
+        } catch {
+          /* keep original */
+        }
+
+        setWorkStatus('리스타일(정면) 생성 중...');
+        const restylePrompt = buildPromptEn('front');
+        const restyled = await studioImage({
+          prompt: restylePrompt,
+          model,
+          aspect_ratio: aspectRatio,
+          num_images: 1,
+          reference_image_url: refForEdit,
+        });
+        const restyledUrl = restyled.images?.[0]?.url;
+        if (!restyledUrl) throw new Error('restyled image url missing');
+        setBaseFrontUrl(restyledUrl);
+
+        setWorkStatus('리스타일 배경 제거 중...');
+        const restyledCut = await studioBgRemove(restyledUrl, { crop_to_bbox: referenceState.crop_to_bbox });
+        setBaseFrontCutoutUrl(restyledCut.image.url);
+        setReferenceImageUrl(restyledCut.image.url);
+
+        let nextTurnaround: Partial<Record<StudioReferenceView, string>> = {};
+        let nextTurnaroundCutouts: Partial<Record<StudioReferenceView, string>> = {};
+        if (wantsTurnaround) {
+          for (const v of views) {
+            if (v === 'front') continue;
+            setWorkStatus(`턴어라운드 생성 중... (${viewKo[v] || v})`);
+            const prompt = buildPromptEn(v);
+            const res = await studioImage({
+              prompt,
+              model,
+              aspect_ratio: aspectRatio,
+              num_images: 1,
+              reference_image_url: restyledUrl,
+            });
+            const outUrl = res.images?.[0]?.url;
+            if (!outUrl) continue;
+            nextTurnaround = { ...nextTurnaround, [v]: outUrl };
+            setTurnaroundUrls(nextTurnaround);
+            try {
+              setWorkStatus(`턴어라운드 배경 제거 중... (${viewKo[v] || v})`);
+              const cut = await studioBgRemove(outUrl, { crop_to_bbox: referenceState.crop_to_bbox });
+              nextTurnaroundCutouts = { ...nextTurnaroundCutouts, [v]: cut.image.url };
+              setTurnaroundCutoutUrls(nextTurnaroundCutouts);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+
+        const meta = setMeta({
+          generated_assets: {
+            source_image_url: sourceImageUrl,
+            base_front_url: restyledUrl,
+            base_front_cutout_url: restyledCut.image.url,
+            turnaround_urls: nextTurnaround,
+            turnaround_cutout_urls: nextTurnaroundCutouts,
+          },
+        });
+        showToast('리스타일 레퍼런스 생성이 완료되었습니다.');
+        downloadJson(`weav_reference_${nickname}.json`, meta);
+      }
+    } catch (e) {
+      console.error(e);
+      showToast('레퍼런스 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setWorkStatus(null);
+      setIsWorking(false);
+    }
+  }, [
+    referenceState,
+    styleTags,
+    sourceImageUrl,
+    baseFrontUrl,
+    baseFrontCutoutUrl,
+    turnaroundUrls,
+    turnaroundCutoutUrls,
+    downloadJson,
+    setReferenceImageUrl,
+    setReferenceState,
+    showToast,
+  ]);
+
+  const mode = referenceState.mode;
+  const showUploadCard = mode !== 'GENERATE_NEW';
+  const showExample = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE';
+  const showPresetSelect = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE';
+  const showStyleTarget = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE' || showAdvanced;
+  const showIdentityLocks = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE' || showAdvanced;
+  const showKeepChange = mode === 'RESTYLE_REFERENCE';
+  const showStyleAnalysisBox = (mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE' || showAdvanced) && !!analyzedStylePrompt;
+
+  return (
+    <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
+      <SectionHeader
+        kicker="Step 4 / Reference"
+        title="레퍼런스 이미지"
+        subtitle="캐릭터/아바타 등 생성에 반영할 레퍼런스 이미지를 업로드합니다."
+      />
+
+      <div className="max-w-[900px] mx-auto space-y-6">
+        {showExample && (
+          <div className="ui-card ui-card--muted text-sm text-slate-700">
+            <span className="ui-label">예시 (하나의 캐릭터로 이어지는 입력)</span>
+            <div className="mt-2 whitespace-pre-wrap">
+              예시 캐릭터: 민수_01
+              {"\n"}- 스타일: 깔끔한 2D 애니, 셀 셰이딩, 선명한 라인, 스튜디오 조명, 흰 배경
+              {"\n"}- 잠금: 검은 단발(앞머리), 짙은 갈색 눈, 오프화이트 후드 + 검정 슬랙스 + 흰 스니커즈, 동그란 안경 + 왼쪽 눈 밑 점
+              {"\n"}- 팔레트: 주색 #111827 / 보조색 #F9FAFB / 포인트 #3B82F6
+            </div>
+          </div>
+        )}
+
+        <div className="ui-card space-y-4">
+          <span className="ui-label">모드</span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {([
+              { id: 'USE_EXISTING_CUTOUT', label: 'A. 컷아웃 그대로 사용', desc: '투명 PNG(배경제거) 이미지를 이미 갖고 있어요' },
+              { id: 'REMOVE_BACKGROUND', label: 'B. AI 배경 제거해서 레퍼런스로', desc: '이미지는 있는데, AI로 배경 제거(컷아웃 PNG)가 필요해요' },
+              { id: 'GENERATE_NEW', label: 'C. 레퍼런스 새로 생성', desc: '이미지가 없어서 캐릭터를 새로 만들고 싶어요' },
+              { id: 'RESTYLE_REFERENCE', label: 'D. 같은 인물로 스타일만 변경', desc: '아이덴티티는 유지하고 화풍/분위기만 바꾸고 싶어요' },
+            ] as Array<{ id: StudioReferenceMode; label: string; desc: string }>).map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => setReferenceState((p) => ({ ...p, mode: m.id }))}
+                className={`rounded-2xl border px-4 py-3 text-left transition-colors ${referenceState.mode === m.id ? 'border-primary/50 ring-1 ring-primary/35 bg-primary/5' : 'border-border/70 hover:border-border/90'}`}
+              >
+                <div className="text-sm font-semibold">{m.label}</div>
+                <div className="text-xs text-muted-foreground mt-1">{m.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="ui-card space-y-4">
+          <span className="ui-label">기본 정보</span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="ui-label">별명 (필수)</label>
+              <input
+                className="ui-input mt-2 w-full"
+                value={referenceState.nickname}
+                onChange={(e) => setReferenceState((p) => ({ ...p, nickname: e.target.value }))}
+                placeholder="예: 민수_01"
+              />
+              <div className="text-xs text-muted-foreground mt-2">
+                프로젝트 안에서 캐릭터를 구분하는 이름이에요. (추천: 한글/영문+숫자 조합)
+              </div>
+            </div>
+            {showPresetSelect ? (
+              <div>
+                <label className="ui-label">프리셋</label>
+                <select
+                  className="ui-input mt-2 w-full"
+                  value={referenceState.preset}
+                  onChange={(e) => setReferenceState((p) => ({ ...p, preset: e.target.value as StudioReferencePreset }))}
+                >
+                  <option value="profile">프로필(정면 1장)</option>
+                  <option value="turnaround_sheet">턴어라운드(정면/옆/뒤/3/4)</option>
+                  <option value="expressions">표정 세트</option>
+                  <option value="3d_modeling">3D 모델링용</option>
+                  <option value="live2d">Live2D용</option>
+                  <option value="all">전체</option>
+                </select>
+                <div className="text-xs text-muted-foreground mt-2">
+                  기본은 턴어라운드가 가장 재사용성이 높아요.
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-end justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced((v) => !v)}
+                  className="ui-btn ui-btn--ghost"
+                >
+                  {showAdvanced ? '고급 설정 닫기' : '고급 설정 열기'}
+                </button>
+              </div>
+            )}
+          </div>
+          {showStyleTarget && (
+            <div>
+              <label className="ui-label">스타일/분위기 키워드</label>
+              <input
+                className="ui-input mt-2 w-full"
+                value={referenceState.style_target}
+                onChange={(e) => setReferenceState((p) => ({ ...p, style_target: e.target.value }))}
+                placeholder="예: 깔끔한 2D 애니, 셀 셰이딩, 선명한 라인, 스튜디오 조명, 흰 배경"
+              />
+              <div className="text-xs text-muted-foreground mt-2">
+                쉼표(,)로 나누면 좋아요. (예: “깔끔한 2D 애니, 셀 셰이딩, 스튜디오 조명”)
+              </div>
+            </div>
+          )}
+          {showKeepChange && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <span className="ui-label">꼭 유지할 요소</span>
+                <div className="flex flex-wrap gap-3 text-sm">
+                  {mustKeepOptions.map((k) => (
+                    <label key={k} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={referenceState.must_keep.includes(k)}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setReferenceState((p) => {
+                            const nextMust = checked
+                              ? Array.from(new Set([...p.must_keep, k]))
+                              : p.must_keep.filter((x) => x !== k);
+                            const conflicts = conflictMustToMay[k] ?? [];
+                            const nextMay = checked ? p.may_change.filter((x) => !conflicts.includes(x as any)) : p.may_change;
+                            return { ...p, must_keep: nextMust as any, may_change: nextMay as any };
+                          });
+                        }}
+                      />
+                      {mustKeepLabel[k]}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <span className="ui-label">변경해도 되는 요소</span>
+                <div className="flex flex-wrap gap-3 text-sm">
+                  {mayChangeOptions.map((k) => (
+                    <label key={k} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={referenceState.may_change.includes(k)}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setReferenceState((p) => {
+                            const nextMay = checked
+                              ? Array.from(new Set([...p.may_change, k]))
+                              : p.may_change.filter((x) => x !== k);
+                            const conflicts = conflictMayToMust[k] ?? [];
+                            const nextMust = checked ? p.must_keep.filter((x) => !conflicts.includes(x as any)) : p.must_keep;
+                            return { ...p, must_keep: nextMust as any, may_change: nextMay as any };
+                          });
+                        }}
+                      />
+                      {mayChangeLabel[k]}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {showUploadCard && (
+          <div className="ui-card space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="ui-label">레퍼런스 업로드</span>
+              <div className="flex items-center gap-2">
+                {mode === 'REMOVE_BACKGROUND' && (
+                  <label className="text-xs text-muted-foreground flex items-center gap-2 select-none">
+                    <input
+                      type="checkbox"
+                      checked={referenceState.crop_to_bbox}
+                      onChange={(e) => setReferenceState((p) => ({ ...p, crop_to_bbox: e.target.checked }))}
+                    />
+                    인물 중심으로 자동 크롭
+                  </label>
+                )}
+                <button onClick={() => fileInputRef.current?.click()} disabled={isRefAnalyzing || isWorking} className="ui-btn ui-btn--secondary">
+                  {isRefAnalyzing ? <><Loader2 size={14} className="animate-spin" /> 업로드 중...</> : '파일 선택'}
+                </button>
+              </div>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {mode === 'USE_EXISTING_CUTOUT'
+                ? '투명 PNG(배경 제거된 이미지)를 업로드해 주세요.'
+                : mode === 'REMOVE_BACKGROUND'
+                  ? '배경이 있는 이미지를 올리면 AI 배경 제거(모델 기반)로 컷아웃(투명 PNG)으로 만들어 드립니다. (복잡한 배경은 경계가 조금 거칠 수 있어요)'
+                  : '기준이 되는 레퍼런스 이미지를 업로드해 주세요.'}
+            </div>
+            <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && handleImgUpload(e.target.files[0])} accept="image/*" />
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); setIsImgDragging(true); }}
+              onDragLeave={() => setIsImgDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setIsImgDragging(false); if (e.dataTransfer.files[0]) handleImgUpload(e.dataTransfer.files[0]); }}
+              className={`rounded-2xl border border-dashed px-4 py-5 cursor-pointer ${isImgDragging ? 'bg-primary/12 border-primary/45' : 'border-border/70 bg-secondary/20'}`}
+            >
+              {sourceImageUrl ? (
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 size={18} className="text-primary mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold">업로드 완료</div>
+                    <div className="text-xs text-muted-foreground mt-1 truncate">
+                      {sourceFileName ? `파일: ${sourceFileName}` : '파일이 업로드되었습니다.'}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      필요하면 클릭해서 다른 파일로 바꿀 수 있어요.
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start gap-3 text-slate-500">
+                  <ImagePlus size={18} className="mt-0.5" />
+                  <div>
+                    <div className="text-sm">여기에 파일을 드래그하거나 클릭해서 선택하세요</div>
+                    <div className="text-xs mt-1">지원: JPG/PNG/WebP (권장: 정면/전신, 단순 배경)</div>
+                  </div>
+                </div>
+              )}
+            </div>
+            {!!referenceImageUrl && (
+              <div className="text-xs text-muted-foreground">
+                업로드 URL이 저장되었습니다. (Step 5 비주얼 생성 시 레퍼런스로 사용)
+              </div>
+            )}
+          </div>
+        )}
+
+        {showStyleAnalysisBox && (
+          <div className="ui-card space-y-4">
+            <span className="ui-label">스타일 요약 (자동 분석)</span>
+            <div className="text-xs text-muted-foreground">
+              업로드한 이미지를 바탕으로 “스타일/분위기 키워드”를 자동으로 뽑아줬어요. 필요하면 위 입력칸에서 수정해도 됩니다.
+            </div>
+            <div className="ui-card--muted text-sm text-slate-700">
+              <div className="whitespace-pre-wrap">{analyzedStylePrompt}</div>
+              <div className="mt-3 pt-3 border-t border-border/60">
+                <span className="ui-label">번역 (KO)</span>
+                <div className="whitespace-pre-wrap mt-2 text-slate-800">
+                  {analyzedStylePromptKo || '번역이 아직 없습니다.'}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showIdentityLocks && (
+          <div className="ui-card space-y-4">
+            <span className="ui-label">아이덴티티 잠금 (선택)</span>
+            <div className="text-xs text-muted-foreground">
+              “이 캐릭터는 이런 특징을 반드시 유지해 주세요”를 짧게 적으면, 뷰가 달라져도 동일 인물로 유지하기가 쉬워요.
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <input
+                className="ui-input"
+                value={referenceState.identity_locks.hair}
+                onChange={(e) => setReferenceState((p) => ({ ...p, identity_locks: { ...p.identity_locks, hair: e.target.value } }))}
+                placeholder="헤어 예시: 검은 단발 + 앞머리"
+              />
+              <input
+                className="ui-input"
+                value={referenceState.identity_locks.eyes}
+                onChange={(e) => setReferenceState((p) => ({ ...p, identity_locks: { ...p.identity_locks, eyes: e.target.value } }))}
+                placeholder="눈/눈동자 예시: 짙은 갈색 눈"
+              />
+              <input
+                className="ui-input"
+                value={referenceState.identity_locks.outfit_silhouette}
+                onChange={(e) => setReferenceState((p) => ({ ...p, identity_locks: { ...p.identity_locks, outfit_silhouette: e.target.value } }))}
+                placeholder="의상 실루엣 예시: 오프화이트 후드 + 검정 슬랙스 + 흰 스니커즈"
+              />
+              <input
+                className="ui-input"
+                value={referenceState.identity_locks.distinctive_marks}
+                onChange={(e) => setReferenceState((p) => ({ ...p, identity_locks: { ...p.identity_locks, distinctive_marks: e.target.value } }))}
+                placeholder="구분 포인트 예시: 동그란 안경 + 왼쪽 눈 밑 점"
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="flex items-center gap-3">
+                <input
+                  type="color"
+                  aria-label="주색 선택"
+                  value={safeColorInputValue(referenceState.palette.primary)}
+                  onChange={(e) =>
+                    setReferenceState((p) => ({
+                      ...p,
+                      palette: { ...p.palette, primary: normalizeHexColor(e.target.value) ?? e.target.value },
+                    }))
+                  }
+                  className="h-10 w-10 rounded-xl border border-border/70 bg-transparent"
+                />
+                <input
+                  className="ui-input flex-1"
+                  value={referenceState.palette.primary}
+                  onChange={(e) => setReferenceState((p) => ({ ...p, palette: { ...p.palette, primary: e.target.value } }))}
+                  placeholder="주색 예시: #111827 (검정 계열)"
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="color"
+                  aria-label="보조색 선택"
+                  value={safeColorInputValue(referenceState.palette.secondary)}
+                  onChange={(e) =>
+                    setReferenceState((p) => ({
+                      ...p,
+                      palette: { ...p.palette, secondary: normalizeHexColor(e.target.value) ?? e.target.value },
+                    }))
+                  }
+                  className="h-10 w-10 rounded-xl border border-border/70 bg-transparent"
+                />
+                <input
+                  className="ui-input flex-1"
+                  value={referenceState.palette.secondary}
+                  onChange={(e) => setReferenceState((p) => ({ ...p, palette: { ...p.palette, secondary: e.target.value } }))}
+                  placeholder="보조색 예시: #F9FAFB (오프화이트)"
+                />
+              </div>
+              <div className="flex items-center gap-3">
+                <input
+                  type="color"
+                  aria-label="포인트 색 선택"
+                  value={safeColorInputValue(referenceState.palette.accent)}
+                  onChange={(e) =>
+                    setReferenceState((p) => ({
+                      ...p,
+                      palette: { ...p.palette, accent: normalizeHexColor(e.target.value) ?? e.target.value },
+                    }))
+                  }
+                  className="h-10 w-10 rounded-xl border border-border/70 bg-transparent"
+                />
+                <input
+                  className="ui-input flex-1"
+                  value={referenceState.palette.accent}
+                  onChange={(e) => setReferenceState((p) => ({ ...p, palette: { ...p.palette, accent: e.target.value } }))}
+                  placeholder="포인트 색 예시: #3B82F6 (파랑)"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row gap-3">
+          <button
+            type="button"
+            onClick={runPipeline}
+            disabled={isWorking || isRefAnalyzing}
+            className="ui-btn ui-btn--primary w-full flex items-center justify-center gap-2"
+          >
+            {isWorking ? <><Loader2 size={16} className="animate-spin" /> {workStatus || '처리 중...'}</> : '레퍼런스 만들기'}
+          </button>
+          <button
+            type="button"
+            onClick={() => referenceState.metadata && downloadJson(`weav_reference_${(referenceState.nickname || 'character').trim() || 'character'}.json`, referenceState.metadata)}
+            disabled={!referenceState.metadata}
+            className="ui-btn ui-btn--secondary w-full"
+          >
+            메타데이터 JSON 다운로드
+          </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setCurrentStep(5)}
+          className="ui-btn ui-btn--primary w-full flex items-center justify-center gap-2"
+        >
+          비주얼로 이동 <ChevronRight size={18} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// --- [Step 5: 이미지 및 대본 생성] ---
 const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const { 
     masterScript, scenes, setScenes, selectedStyle, setSelectedStyle, videoFormat,
-    referenceImage, setReferenceImage, referenceImageUrl, setReferenceImageUrl,
-    analyzedStylePrompt, setAnalyzedStylePrompt, analyzedStylePromptKo, setAnalyzedStylePromptKo,
+    referenceImageUrl,
+    analyzedStylePrompt,
     urlAnalysisData, selectedBenchmarkPatterns
   } = useGlobal();
 
-  const [isImgDragging, setIsImgDragging] = useState(false);
   const [isSplitting, setIsSplitting] = useState(false);
-  const [isRefAnalyzing, setIsRefAnalyzing] = useState(false);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
   const [generateAllProgress, setGenerateAllProgress] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const styleLab = [
     { 
@@ -1399,33 +2274,6 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
     }
   };
 
-  const handleImgUpload = async (file: File) => {
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      const base64 = e.target?.result as string;
-      setReferenceImage(base64);
-      setIsRefAnalyzing(true);
-      try {
-        let uploadedUrl = '';
-        try {
-          const uploaded = await uploadStudioReferenceImage(file);
-          uploadedUrl = uploaded.url;
-          setReferenceImageUrl(uploaded.url);
-        } catch {
-          uploadedUrl = '';
-          setReferenceImageUrl('');
-        }
-        const styleText = await analyzeReferenceImage(base64);
-        setAnalyzedStylePrompt(styleText);
-        setAnalyzedStylePromptKo(await translateToKorean(styleText));
-        showToast(uploadedUrl ? "레퍼런스 이미지 업로드 및 스타일 분석 완료." : "레퍼런스 이미지 스타일 분석 완료.");
-      } finally {
-        setIsRefAnalyzing(false);
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
   const addManualStudioScene = () => {
     const newScene: StudioScene = {
       id: Date.now(),
@@ -1443,7 +2291,6 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
     showToast("새 장면이 추가되었습니다.");
   };
 
-  const translatingRef = useRef(false);
   const promptTranslateTimersRef = useRef<Record<number, number>>({});
 
   const scheduleScenePromptTranslate = useCallback((sceneId: number, englishPrompt: string) => {
@@ -1467,20 +2314,6 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
       }
     };
   }, []);
-
-  useEffect(() => {
-    if (translatingRef.current) return;
-    if (analyzedStylePrompt && !analyzedStylePromptKo) {
-      translatingRef.current = true;
-      translateToKorean(analyzedStylePrompt)
-        .then((ko) => {
-          if (ko) setAnalyzedStylePromptKo(ko);
-        })
-        .finally(() => {
-          translatingRef.current = false;
-        });
-    }
-  }, [analyzedStylePrompt, analyzedStylePromptKo, setAnalyzedStylePromptKo]);
 
   const handleGenImage = async (idx: number) => {
     const scene = scenes[idx];
@@ -1524,12 +2357,12 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
     }
   };
 
-  return (
-    <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
-      <SectionHeader
-        kicker="Step 4 / Visual"
-        title="이미지 및 대본 생성"
-        subtitle="장면 단위로 시각적 연출과 프롬프트를 정리합니다."
+	  return (
+	    <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
+	      <SectionHeader
+	        kicker="Step 5 / Visual"
+	        title="이미지 및 대본 생성"
+	        subtitle="장면 단위로 시각적 연출과 프롬프트를 정리합니다."
         right={(
           <div className="flex flex-wrap gap-2">
             <button onClick={handleStudioSceneSplitting} disabled={isSplitting || isGeneratingAll} className="ui-btn ui-btn--secondary">
@@ -1543,8 +2376,8 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
       />
 
       <div className="grid grid-cols-12 gap-8 items-start">
-        <div className="col-span-12 lg:col-span-4 space-y-6">
-          <div className="ui-card space-y-4">
+	        <div className="col-span-12 lg:col-span-4 space-y-6">
+	          <div className="ui-card space-y-4">
             <span className="ui-label">스타일 선택</span>
             <div className="space-y-2">
               {styleLab.map(style => (
@@ -1561,59 +2394,9 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
                   <span className="style-choice__price ml-auto">{style.price}</span>
                 </button>
               ))}
-            </div>
-          </div>
-
-          <div className="ui-card space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="ui-label">레퍼런스</span>
-              <button onClick={() => fileInputRef.current?.click()} disabled={isRefAnalyzing} className="ui-btn ui-btn--secondary">
-                {isRefAnalyzing ? <><Loader2 size={14} className="animate-spin" /> 분석 중...</> : '업로드'}
-              </button>
-            </div>
-            <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && handleImgUpload(e.target.files[0])} accept="image/*" />
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              onDragOver={(e) => { e.preventDefault(); setIsImgDragging(true); }}
-              onDragLeave={() => setIsImgDragging(false)}
-              onDrop={(e) => { e.preventDefault(); setIsImgDragging(false); if (e.dataTransfer.files[0]) handleImgUpload(e.dataTransfer.files[0]); }}
-              className={`aspect-square rounded-2xl border border-dashed flex items-center justify-center overflow-hidden cursor-pointer ${isImgDragging ? 'bg-primary/12 border-primary/45' : 'border-border/70 bg-secondary/45'}`}
-            >
-              {referenceImage ? (
-                <img src={referenceImage} className="w-full h-full object-cover" />
-              ) : (
-                <div className="text-center space-y-2 text-slate-500">
-                  <ImagePlus size={28} className="mx-auto" />
-                  <p className="text-sm">이미지를 드래그하거나 클릭하세요</p>
-                </div>
-              )}
-            </div>
-            {analyzedStylePrompt && (
-              <div className="ui-card--muted text-sm text-slate-700">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="ui-label">스타일 요약 (EN)</span>
-                  <button
-                    onClick={async () => {
-                      if (!analyzedStylePrompt) return;
-                      const ko = await translateToKorean(analyzedStylePrompt);
-                      if (ko) setAnalyzedStylePromptKo(ko);
-                    }}
-                    className="ui-btn ui-btn--ghost"
-                  >
-                    KO 번역
-                  </button>
-                </div>
-                <div className="whitespace-pre-wrap mt-2">{analyzedStylePrompt}</div>
-                <div className="mt-3 pt-3 border-t border-border/60">
-                  <span className="ui-label">번역 (KO)</span>
-                  <div className="whitespace-pre-wrap mt-2 text-slate-800">
-                    {analyzedStylePromptKo || '번역이 아직 없습니다.'}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+	            </div>
+	          </div>
+	        </div>
 
         <div className="col-span-12 lg:col-span-8 space-y-4">
           <div className="ui-card flex items-center justify-between">
@@ -1714,7 +2497,7 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
   );
 };
 
-// --- [Step 5: 보이스 프리셋 (MiniMax voice_id)] ---
+// --- [Step 6: 보이스 프리셋 (MiniMax voice_id)] ---
 const VOICE_PRESETS = [
   { id: 'ko-female-1', voiceId: 'Wise_Woman', name: '한국어 여성 (밝은 톤)', sample: '안녕하세요. 오늘 영상도 재미있게 봐 주세요.' },
   { id: 'ko-female-2', voiceId: 'Young_Lady', name: '한국어 여성 (친근)', sample: '일상 브이로그나 리뷰에 잘 어울려요.' },
@@ -1760,7 +2543,7 @@ function getYoutubeThumbnailUrl(videoId: string): string {
   return `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
 }
 
-// --- [Step 5: AI 음성 합성] ---
+// --- [Step 6: AI 음성 합성] ---
 const VoiceStep = () => {
   const { scenes, setScenes, setSceneDurations, selectedVoicePresetId, setSelectedVoicePresetId } = useGlobal();
   const [segments, setSegments] = useState<VoiceSegment[]>([]);
@@ -1838,7 +2621,7 @@ const VoiceStep = () => {
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 5 / Voice"
+        kicker="Step 6 / Voice"
         title="AI 음성 합성"
         subtitle="장면별 대본을 선택한 보이스로 합성합니다. 미리듣기 후 전체 내보내기를 진행하세요."
       />
@@ -1892,7 +2675,7 @@ const VoiceStep = () => {
           <div className="space-y-3">
             {segments.length === 0 ? (
               <div className="ui-card--ghost ui-card--airy text-center text-slate-500">
-                Step 4에서 장면을 만든 뒤 여기로 오세요.
+                Step 5에서 장면을 만든 뒤 여기로 오세요.
               </div>
             ) : (
               segments.map((seg, idx) => (
@@ -1920,7 +2703,7 @@ const VoiceStep = () => {
   );
 };
 
-// --- [Step 6: AI 영상 생성] ---
+// --- [Step 7: AI 영상 생성] ---
 const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const { sessionId, scenes, videoFormat, subtitlesEnabled, setSubtitlesEnabled, burnInSubtitles, setBurnInSubtitles, setVideoUrl } = useGlobal();
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -2012,7 +2795,7 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   };
 
   const handleDownloadSrt = () => {
-    if (readyScenes.length === 0) return showToast('자막을 만들려면 이미지+음성이 있는 씬이 필요합니다. (Step 4~5 완료)');
+    if (readyScenes.length === 0) return showToast('자막을 만들려면 이미지+음성이 있는 씬이 필요합니다. (Step 5~6 완료)');
     const cues = buildCues();
     const lines: string[] = [];
     cues.forEach((c, i) => {
@@ -2025,7 +2808,7 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   };
 
   const handleDownloadVtt = () => {
-    if (readyScenes.length === 0) return showToast('자막을 만들려면 이미지+음성이 있는 씬이 필요합니다. (Step 4~5 완료)');
+    if (readyScenes.length === 0) return showToast('자막을 만들려면 이미지+음성이 있는 씬이 필요합니다. (Step 5~6 완료)');
     const cues = buildCues();
     const lines: string[] = ['WEBVTT', ''];
     cues.forEach((c) => {
@@ -2038,7 +2821,7 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
   const handleExport = async () => {
     if (!sessionId) return showToast('세션 ID가 없습니다. (Studio 프로젝트를 새로 생성 후 시도해주세요)');
-    if (readyScenes.length === 0) return showToast('내보내려면 이미지+음성이 모두 있는 씬이 필요합니다. Step 4~5를 완료해주세요.');
+    if (readyScenes.length === 0) return showToast('내보내려면 이미지+음성이 모두 있는 씬이 필요합니다. Step 5~6를 완료해주세요.');
     setJobError(null);
     setResultVideoUrl(null);
     setResultSrtUrl(null);
@@ -2112,7 +2895,7 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 6 / Video"
+        kicker="Step 7 / Video"
         title="AI 영상 생성"
         subtitle="음성·이미지 타임라인을 합쳐 최종 영상으로 내보냅니다. 포맷에 맞춰 렌더링됩니다."
       />
@@ -2216,7 +2999,7 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
             </div>
           </div>
           <div className="ui-card ui-card--muted text-sm text-slate-600">
-            Step 4에서 씬 이미지, Step 5에서 씬 음성을 만든 뒤 이 단계에서 MP4로 렌더링합니다.
+            Step 5에서 씬 이미지, Step 6에서 씬 음성을 만든 뒤 이 단계에서 MP4로 렌더링합니다.
           </div>
         </div>
       </div>
@@ -2224,7 +3007,7 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   );
 };
 
-// --- [Step 7: 최적화 메타 설정 — AI 자동 생성] ---
+// --- [Step 8: 최적화 메타 설정 — AI 자동 생성] ---
 const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const {
     selectedTopic,
@@ -2283,7 +3066,7 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 7 / Meta"
+        kicker="Step 8 / Meta"
         title="메타데이터 AI 생성"
         subtitle="영상 제목, 설명(타임라인·해시태그 포함), 고정댓글을 AI가 자동으로 생성합니다. 생성 후 수정 가능합니다."
         right={
@@ -2374,7 +3157,7 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   );
 };
 
-// --- [Step 8: 썸네일 연구소] ---
+// --- [Step 9: 썸네일 연구소] ---
 const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const { thumbnailData, setThumbnailData, setCurrentStep } = useGlobal();
   const thumbnails = (thumbnailData.thumbnails?.length ?? 0) > 0 ? (thumbnailData.thumbnails as ThumbnailCandidate[]) : MOCK_THUMBNAILS;
@@ -2461,7 +3244,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 8 / Thumbnail"
+        kicker="Step 9 / Thumbnail"
         title="썸네일 연구소"
         subtitle="유튜브 URL로 썸네일을 불러온 뒤 벤치마킹하면, 같은 톤의 썸네일을 AI가 생성합니다."
       />
@@ -2553,7 +3336,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         <div className="pt-4">
           <button
             type="button"
-            onClick={() => setCurrentStep(9)}
+            onClick={() => setCurrentStep(10)}
             className="ui-btn ui-btn--primary w-full flex items-center justify-center gap-2"
           >
             완성 미리보기 <ChevronRight size={18} />
@@ -2564,7 +3347,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   );
 };
 
-// --- [Step 9: 완성 미리보기] ---
+// --- [Step 10: 완성 미리보기] ---
 const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const { videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData, setCurrentStep } = useGlobal();
   const [isDownloading, setIsDownloading] = useState(false);
@@ -2575,7 +3358,7 @@ const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
   const handleDownload = async () => {
     if (!videoUrl) {
-      showToast('영상을 먼저 생성해 주세요. (Step 6)');
+      showToast('영상을 먼저 생성해 주세요. (Step 7)');
       return;
     }
     setIsDownloading(true);
@@ -2599,7 +3382,7 @@ const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
-        kicker="Step 9 / 미리보기"
+        kicker="Step 10 / 미리보기"
         title="완성 미리보기"
         subtitle="유튜브 업로드 후 보이는 모습으로 한눈에 확인하세요."
       />
@@ -2624,14 +3407,14 @@ const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
                 <div className="relative w-full h-full">
                   <img src={thumbImg} alt="썸네일" className="w-full h-full object-contain" />
                   <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-                    <p className="text-white/90 text-sm">Step 6에서 영상을 생성해 주세요</p>
+                    <p className="text-white/90 text-sm">Step 7에서 영상을 생성해 주세요</p>
                   </div>
                 </div>
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center text-slate-500">
                   <Film size={48} className="mb-2 opacity-50" />
                   <p className="text-sm">영상·썸네일을 먼저 완성해 주세요</p>
-                  <p className="text-xs mt-1">Step 6 영상 생성 → Step 8 썸네일</p>
+                  <p className="text-xs mt-1">Step 7 영상 생성 → Step 9 썸네일</p>
                 </div>
               )}
             </div>
@@ -2646,7 +3429,7 @@ const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
               <p className="text-xs text-muted-foreground mt-1">WEAV Studio</p>
             </div>
             <div className="rounded-xl border border-border/70 bg-secondary/45 px-4 py-3 text-sm text-muted-foreground whitespace-pre-wrap max-h-[200px] overflow-y-auto">
-              {metaDescription || '설명이 없습니다. Step 7에서 메타데이터를 생성해 주세요.'}
+              {metaDescription || '설명이 없습니다. Step 8에서 메타데이터를 생성해 주세요.'}
             </div>
             {metaPinnedComment && (
               <div className="rounded-xl border border-border/70 bg-secondary/30 px-4 py-3 text-sm">
@@ -2669,7 +3452,7 @@ const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
           {setCurrentStep && (
             <button
               type="button"
-              onClick={() => setCurrentStep(8)}
+	              onClick={() => setCurrentStep(9)}
               className="ui-btn ui-btn--secondary"
             >
               썸네일로 돌아가기
@@ -2827,12 +3610,13 @@ const AppContent = ({ projectName }: { projectName: string }) => {
     { id: 1, label: '기획', icon: <Target size={14}/> },
     { id: 2, label: '주제', icon: <Sparkles size={14}/> },
     { id: 3, label: '구조', icon: <PenTool size={14}/> },
-    { id: 4, label: '비주얼', icon: <ImageIcon size={14}/> },
-    { id: 5, label: '음성', icon: <Mic2 size={14}/> },
-    { id: 6, label: '영상', icon: <Video size={14}/> },
-    { id: 7, label: '메타', icon: <Monitor size={14}/> },
-    { id: 8, label: '썸네일', icon: <ImageIcon size={14}/> },
-    { id: 9, label: '미리보기', icon: <Film size={14}/> }
+    { id: 4, label: '레퍼런스', icon: <ImagePlus size={14}/> },
+    { id: 5, label: '비주얼', icon: <ImageIcon size={14}/> },
+    { id: 6, label: '음성', icon: <Mic2 size={14}/> },
+    { id: 7, label: '영상', icon: <Video size={14}/> },
+    { id: 8, label: '메타', icon: <Monitor size={14}/> },
+    { id: 9, label: '썸네일', icon: <ImageIcon size={14}/> },
+    { id: 10, label: '미리보기', icon: <Film size={14}/> }
   ];
 
   return (
@@ -2937,12 +3721,13 @@ const AppContent = ({ projectName }: { projectName: string }) => {
           {currentStep === 1 && <TopicAnalysisStep showToast={showToast} />}
           {currentStep === 2 && <TopicGenerationStep showToast={showToast} />}
           {currentStep === 3 && <ScriptPlanningStep showToast={showToast} />}
-          {currentStep === 4 && <ImageAndScriptStep showToast={showToast} />}
-          {currentStep === 5 && <VoiceStep />}
-          {currentStep === 6 && <VideoStep showToast={showToast} />}
-          {currentStep === 7 && <MetaStep showToast={showToast} />}
-          {currentStep === 8 && <ThumbnailStep showToast={showToast} />}
-          {currentStep === 9 && <PreviewStep showToast={showToast} />}
+          {currentStep === 4 && <ReferenceStep showToast={showToast} />}
+          {currentStep === 5 && <ImageAndScriptStep showToast={showToast} />}
+          {currentStep === 6 && <VoiceStep />}
+          {currentStep === 7 && <VideoStep showToast={showToast} />}
+          {currentStep === 8 && <MetaStep showToast={showToast} />}
+          {currentStep === 9 && <ThumbnailStep showToast={showToast} />}
+          {currentStep === 10 && <PreviewStep showToast={showToast} />}
         </div>
       </main>
       

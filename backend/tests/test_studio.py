@@ -78,6 +78,30 @@ class StudioTTSTests(TestCase):
         )
         self.assertEqual(resp.status_code, 400)
 
+
+class StudioBgRemoveTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+    def test_studio_bg_remove_missing_image_url_400(self):
+        resp = self.client.post(
+            '/api/v1/studio/bg-remove/',
+            data={},
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    @patch('apps.ai.fal_client.remove_background_fal')
+    def test_studio_bg_remove_ok(self, mock_rembg):
+        mock_rembg.return_value = {'url': 'https://example.com/cutout.png'}
+        resp = self.client.post(
+            '/api/v1/studio/bg-remove/',
+            data={'image_url': 'https://example.com/in.png', 'crop_to_bbox': False},
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['image']['url'], 'https://example.com/cutout.png')
+
     def test_studio_tts_text_too_long_400(self):
         resp = self.client.post(
             '/api/v1/studio/tts/',

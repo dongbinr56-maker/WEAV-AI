@@ -9,6 +9,7 @@ const STUDIO_EXPORT = '/api/v1/studio/export/';
 const STUDIO_EXPORT_JOB = '/api/v1/studio/export/job/';
 const STUDIO_UPLOAD_REFERENCE_IMAGE = '/api/v1/chat/image/upload-reference/';
 const STUDIO_VIDEO = '/api/v1/studio/video/';
+const STUDIO_BG_REMOVE = '/api/v1/studio/bg-remove/';
 
 export interface StudioLlmOptions {
   prompt: string;
@@ -126,6 +127,11 @@ export async function uploadStudioReferenceImage(file: File): Promise<{ url: str
   const form = new FormData();
   form.append('image', file);
   return api.postForm<{ url: string }>(STUDIO_UPLOAD_REFERENCE_IMAGE, form);
+}
+
+/** Studio Reference Step: background removal (rembg). */
+export async function studioBgRemove(imageUrl: string, options?: { crop_to_bbox?: boolean }): Promise<{ image: { url: string } }> {
+  return api.post<{ image: { url: string } }>(STUDIO_BG_REMOVE, { image_url: imageUrl, ...(options ?? {}) });
 }
 
 export type StudioExportScene = {
