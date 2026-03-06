@@ -55,10 +55,19 @@ export interface Citation {
   snippet?: string;
 }
 
+/** 채팅 job 결과 (판별기 점수, 검색 사용 여부 등, 백엔드 payload) */
+export interface ChatJobResult {
+  retrieval_score?: number;
+  use_gemini_search?: boolean;
+  external_context_used?: boolean;
+}
+
 export interface JobStatus {
   task_id: string;
   job_id: number;
   status: 'pending' | 'running' | 'success' | 'failure';
+  kind?: 'chat' | 'image';
+  result?: ChatJobResult;
   message?: Message;
   image?: ImageRecord;
   error?: string;

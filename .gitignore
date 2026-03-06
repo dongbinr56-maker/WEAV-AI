@@ -76,6 +76,10 @@ infra/.env
 infra/minio-data/
 # /Volumes/WEAVAI_2T/minio-data/  # Uncomment if using different path
 
+# GCP / Vertex AI service account keys (민감 정보)
+**/gen-lang-client-*.json
+**/*-gcp-*.json
+
 # Firebase service account keys (민감 정보)
 **/firebase-*.json
 **/*firebase*service*.json

@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Optional
 
 from .fal_client import (
@@ -34,6 +35,17 @@ CHAT_MODEL_ALIASES = {
     'gemini-2.5-pro': 'google/gemini-2.5-flash',
 }
 
+# 채팅 모델별 지식 컷오프(YYYY-MM). 검색 필요성 판별·규칙 기반 필터에 사용.
+# None = 공식 문서에 미기재(보수적으로 검색 권장 시 유리).
+MODEL_KNOWLEDGE_CUTOFF: dict[str, date | None] = {
+    "google/gemini-2.5-flash": date(2025, 1, 1),   # Gemini 2.5 Flash model card
+    "openai/gpt-4.1": date(2024, 6, 1),             # OpenAI official
+    "anthropic/claude-sonnet-4.6": date(2025, 5, 1),
+    "anthropic/claude-opus-4.6": date(2025, 5, 1),
+    "anthropic/claude-sonnet-4.5": date(2025, 7, 1), # Vertex AI docs
+    "meta-llama/llama-4-maverick": date(2024, 8, 1),
+    "openai/gpt-oss-120b": None,                     # not specified in model card
+}
 
 def normalize_chat_model(model: Optional[str]) -> str:
     m = (model or '').strip() or 'google/gemini-2.5-flash'

@@ -1,4 +1,5 @@
 from typing import Optional, Tuple
+import logging
 import re
 
 from celery import shared_task
@@ -16,6 +17,9 @@ from .router import (
 from .errors import AIError
 from .utils import get_rag_enhanced_system_prompt, get_rag_context_string
 from .system_rules import prepend_model_rule
+from .retrieval import get_retrieval_score, get_web_search_context
+
+logger = logging.getLogger(__name__)
 
 DOC_MENTION_RE = re.compile(r'@([^\s]+)')
 DOC_MENTION_QUOTED_RE = re.compile(r'@"([^"]+)"')
@@ -91,6 +95,7 @@ def task_chat(self, job_id: int, prompt: str, model: str, system_prompt: Optiona
         recent_conversation = "\n".join(
             f"{m.role.capitalize()}: {m.content}" for m in recent if (m.role and m.content)
         )
+        # 1) 세션에 업로드된 문서(RAG) 우선 처리
         documents = list(Document.objects.filter(session=job.session).order_by('-created_at'))
         doc_hit = find_document_mention(prompt, documents)
         doc_name = None
@@ -174,6 +179,28 @@ def task_chat(self, job_id: int, prompt: str, model: str, system_prompt: Optiona
             )
             reply = run_chat(prompt_for_model, model=model, system_prompt=enhanced_system_prompt)
         else:
+            # 2) 일반 채팅: 검색 필요성 평가 → Gemini 검색(선택) → RAG 컨텍스트와 함께 모델 호출
+            retrieval_score = get_retrieval_score(prompt, model=model)
+            use_gemini_search = retrieval_score >= 0.3
+            job.result = {'retrieval_score': retrieval_score, 'use_gemini_search': use_gemini_search}
+            logger.info(
+                "task_chat retrieval job_id=%s retrieval_score=%.2f use_gemini_search=%s",
+                job_id, retrieval_score, use_gemini_search,
+            )
+
+            external_context = ""
+            if use_gemini_search:
+                external_context = get_web_search_context(prompt, num=10)
+                if not external_context:
+                    logger.warning(
+                        "task_chat job_id=%s: use_gemini_search=True but external_context empty. "
+                        "Vertex AI: GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_APPLICATION_CREDENTIALS. "
+                        "Or Custom Search: GOOGLE_CUSTOM_SEARCH_API_KEY, GOOGLE_CSE_CX.",
+                        job_id,
+                    )
+
+            job.result["external_context_used"] = bool(external_context)
+
             enhanced_system_prompt = get_rag_enhanced_system_prompt(
                 job.session.id,
                 prompt,
@@ -181,13 +208,29 @@ def task_chat(self, job_id: int, prompt: str, model: str, system_prompt: Optiona
                 recent_conversation=recent_conversation,
                 exclude_sources=['pdf'],
             )
+
+            if external_context:
+                enhanced_system_prompt = (
+                    f"{enhanced_system_prompt}\n\n"
+                    "## External up-to-date information\n"
+                    f"{external_context}\n\n"
+                    "Use the above external information as the primary source for time-sensitive facts "
+                    "or events after your knowledge cutoff. If you used this information in your answer, "
+                    "say so (e.g. '검색 결과 기준', '실시간 검색 반영') and do NOT state a knowledge cutoff date "
+                    "(e.g. do not say '2024년 6월 기준'). If the external info does not contain the answer, "
+                    "you may fall back to your internal knowledge but clearly indicate any uncertainty."
+                )
+
             reply = run_chat(prompt, model=model, system_prompt=enhanced_system_prompt)
         with transaction.atomic():
             msg = Message.objects.create(session=job.session, role='assistant', content=reply, citations=citations)
             job.message = msg
             job.status = 'success'
             job.error_message = ''
-            job.save(update_fields=['message_id', 'status', 'error_message', 'updated_at'])
+            update_fields = ['message_id', 'status', 'error_message', 'updated_at']
+            if job.result and 'retrieval_score' in job.result:
+                update_fields.append('result')
+            job.save(update_fields=update_fields)
 
         # Index assistant response in RAG
         # Optimal point: After transaction commit to ensure data consistency
