@@ -174,3 +174,4 @@ temp/
 
 # Local exports/artifacts
 output/
+.cursor/

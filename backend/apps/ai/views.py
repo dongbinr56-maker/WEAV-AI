@@ -23,6 +23,32 @@ from .router import (
 from . import tasks
 
 
+def _permission_denied_response():
+    return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+
+def _user_owns_resource(request, owner) -> bool:
+    if owner is None:
+        return True
+    if not request.user.is_authenticated:
+        return False
+    return owner == request.user
+
+
+def _get_accessible_session(request, session_id):
+    session = get_object_or_404(Session, pk=session_id)
+    if not _user_owns_resource(request, session.user):
+        return None, _permission_denied_response()
+    return session, None
+
+
+def _get_accessible_job(request, task_id):
+    job = get_object_or_404(Job, task_id=task_id)
+    if not _user_owns_resource(request, job.session.user):
+        return None, _permission_denied_response()
+    return job, None
+
+
 @api_view(['POST'])
 def complete_chat(request):
     try:
@@ -33,7 +59,9 @@ def complete_chat(request):
     if not session_id:
         return Response({'detail': 'session_id required'}, status=status.HTTP_400_BAD_REQUEST)
     try:
-        session = get_object_or_404(Session, pk=session_id)
+        session, denied = _get_accessible_session(request, session_id)
+        if denied:
+            return denied
         if session.kind not in (SESSION_KIND_CHAT, SESSION_KIND_IMAGE):
             return Response({'detail': 'Not a chat session'}, status=status.HTTP_400_BAD_REQUEST)
         user_msg = Message.objects.create(session=session, role='user', content=body.prompt)
@@ -71,7 +99,9 @@ def complete_image(request):
     session_id = request.data.get('session_id')
     if not session_id:
         return Response({'detail': 'session_id required'}, status=status.HTTP_400_BAD_REQUEST)
-    session = get_object_or_404(Session, pk=session_id)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
     if session.kind not in (SESSION_KIND_IMAGE, SESSION_KIND_CHAT):
         return Response({'detail': 'Not an image session'}, status=status.HTTP_400_BAD_REQUEST)
     if Job.objects.filter(session_id=session.pk, kind='image').count() == 0:
@@ -208,7 +238,9 @@ def regenerate_chat(request):
     session_id = request.data.get('session_id')
     if not session_id:
         return Response({'detail': 'session_id required'}, status=status.HTTP_400_BAD_REQUEST)
-    session = get_object_or_404(Session, pk=session_id)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
     if session.kind != SESSION_KIND_CHAT:
         return Response({'detail': 'Not a chat session'}, status=status.HTTP_400_BAD_REQUEST)
     messages = list(session.messages.order_by('created_at'))
@@ -249,7 +281,9 @@ def regenerate_image(request):
     session_id = request.data.get('session_id')
     if not session_id:
         return Response({'detail': 'session_id required'}, status=status.HTTP_400_BAD_REQUEST)
-    session = get_object_or_404(Session, pk=session_id)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
     if session.kind not in (SESSION_KIND_IMAGE, SESSION_KIND_CHAT):
         return Response({'detail': 'Not an image session'}, status=status.HTTP_400_BAD_REQUEST)
     last_record = session.image_records.order_by('-created_at').first()
@@ -283,14 +317,19 @@ def regenerate_image(request):
 
 @api_view(['POST'])
 def job_cancel(request, task_id):
+    job, denied = _get_accessible_job(request, task_id)
+    if denied:
+        return denied
     from celery import current_app
-    current_app.control.revoke(task_id, terminate=True)
+    current_app.control.revoke(job.task_id, terminate=True)
     return Response({'status': 'cancelled'}, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
 def job_status(request, task_id):
-    job = get_object_or_404(Job, task_id=task_id)
+    job, denied = _get_accessible_job(request, task_id)
+    if denied:
+        return denied
     payload = {'task_id': task_id, 'job_id': job.id, 'status': job.status, 'kind': job.kind, 'result': job.result or {}}
     if job.status == 'success':
         if job.message_id:
