@@ -24,6 +24,8 @@ export interface StudioImageOptions {
   num_images?: number;
   seed?: number;
   reference_image_url?: string;
+  resolution?: '1K' | '2K' | '4K';
+  output_format?: 'png' | 'jpeg' | 'webp';
 }
 
 export interface StudioTtsOptions {
@@ -90,7 +92,7 @@ export async function studioLlm(options: StudioLlmOptions): Promise<{ output: st
 
 /** Studio scene image (fal imagen/flux/etc). */
 export async function studioImage(options: StudioImageOptions): Promise<{ images: Array<{ url: string }> }> {
-  const { prompt, model, aspect_ratio, num_images, seed, reference_image_url } = options;
+  const { prompt, model, aspect_ratio, num_images, seed, reference_image_url, resolution, output_format } = options;
   return api.post<{ images: Array<{ url: string }> }>(STUDIO_IMAGE, {
     prompt,
     ...(model != null && { model }),
@@ -98,6 +100,8 @@ export async function studioImage(options: StudioImageOptions): Promise<{ images
     ...(num_images != null && { num_images }),
     ...(seed != null && { seed }),
     ...(reference_image_url != null && { reference_image_url }),
+    ...(resolution != null && { resolution }),
+    ...(output_format != null && { output_format }),
   });
 }
 

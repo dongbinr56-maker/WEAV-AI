@@ -22,23 +22,16 @@ export interface StudioScene {
 }
 
 export type StudioReferenceMode = 'USE_EXISTING_CUTOUT' | 'REMOVE_BACKGROUND' | 'GENERATE_NEW' | 'RESTYLE_REFERENCE';
-export type StudioReferencePreset = 'profile' | 'turnaround_sheet' | 'expressions' | '3d_modeling' | 'live2d' | 'all';
 export type StudioReferenceView = 'front' | 'side_right' | 'back' | 'three_quarter_front';
-
-export type StudioReferenceIdentityLocks = {
-  hair: string;
-  eyes: string;
-  outfit_silhouette: string;
-  distinctive_marks: string;
-};
 
 export type StudioReferencePalette = { primary: string; secondary: string; accent: string };
 
 export type StudioReferenceMetadata = {
   nickname: string;
-  preset: StudioReferencePreset;
   style_tags: string[];
-  identity_locks: StudioReferenceIdentityLocks;
+  age_group: string;
+  gender: string;
+  height_cm: number | null;
   palette: StudioReferencePalette;
   constraints: { must_not_have: string[] };
   allowed_variations: {
@@ -51,17 +44,20 @@ export type StudioReferenceMetadata = {
     base_front_cutout_url?: string;
     turnaround_urls?: Partial<Record<StudioReferenceView, string>>;
     turnaround_cutout_urls?: Partial<Record<StudioReferenceView, string>>;
+    grid_source_url?: string;
+    grid_cutout_urls?: string[];
   };
 };
 
 export type StudioReferenceState = {
   mode: StudioReferenceMode;
   nickname: string;
-  preset: StudioReferencePreset;
   style_target: string;
+  age_group: string;
+  gender: string;
+  height_cm: number | null;
   must_keep: StudioReferenceMetadata['allowed_variations']['must_keep'];
   may_change: StudioReferenceMetadata['allowed_variations']['may_change'];
-  identity_locks: StudioReferenceIdentityLocks;
   palette: StudioReferencePalette;
   constraints: { must_not_have: string[] };
   crop_to_bbox: boolean;

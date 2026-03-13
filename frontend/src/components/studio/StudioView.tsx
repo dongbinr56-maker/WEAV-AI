@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useCallback, useRef, createContext, useContext, useMemo } from 'react';
+import JSZip from 'jszip';
 import {
   X, History, Ghost, BookOpen, TrendingUp, Globe, MonitorPlay, ChevronRight, Flame, Loader2,
   CheckCircle2, PlayCircle, Layers, Trash2, Link as LinkIcon, Sparkles, Target, Terminal,
@@ -16,7 +17,6 @@ import {
 	  StudioAnalysisResult,
 	  StudioScriptPlanningData,
 	  type StudioReferenceMode,
-	  type StudioReferencePreset,
 	  type StudioReferenceState,
 	  type StudioReferenceView,
 	} from '@/types/studio';
@@ -26,7 +26,7 @@ import {
 	  synthesizeMasterScript, splitScriptIntoScenes, generateSceneImage,
 	  analyzeReferenceImage, generateScenePrompt, generateMetaData, generateBenchmarkThumbnail, translateToKorean, translateToEnglish
 	} from '@/services/studio/geminiService';
-	import { studioTts, studioImage, studioBgRemove, uploadStudioReferenceImage, studioExport, studioExportJobStatus, studioExportJobCancel } from '@/services/studio/studioFalApi';
+import { studioTts, studioImage, uploadStudioReferenceImage, studioExport, studioExportJobStatus, studioExportJobCancel } from '@/services/studio/studioFalApi';
 import { fetchTrendingByCategory, formatTrendingGrowth, type TrendingItemWithCategory } from '@/services/studio/trendingApi';
 import { InputDialog } from '@/components/ui/InputDialog';
 
@@ -78,11 +78,12 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
 	    const def: StudioReferenceState = {
 	      mode: 'REMOVE_BACKGROUND',
 	      nickname: '',
-	      preset: 'turnaround_sheet',
 	      style_target: '',
+	      age_group: '',
+	      gender: '',
+	      height_cm: null,
 	      must_keep: ['face', 'hair', 'colors'],
 	      may_change: [],
-	      identity_locks: { hair: '', eyes: '', outfit_silhouette: '', distinctive_marks: '' },
 	      palette: { primary: '', secondary: '', accent: '' },
 	      constraints: { must_not_have: ['text', 'watermark', 'logo', 'busy background', 'multiple characters'] },
 	      crop_to_bbox: false,
@@ -92,25 +93,20 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
 	    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return def;
 	    const obj = raw as Record<string, unknown>;
 	    const mode = typeof obj.mode === 'string' ? obj.mode : def.mode;
-	    const preset = typeof obj.preset === 'string' ? obj.preset : def.preset;
-	    const identity = (obj.identity_locks && typeof obj.identity_locks === 'object' && !Array.isArray(obj.identity_locks)) ? obj.identity_locks as Record<string, unknown> : {};
 	    const palette = (obj.palette && typeof obj.palette === 'object' && !Array.isArray(obj.palette)) ? obj.palette as Record<string, unknown> : {};
 	    const constraints = (obj.constraints && typeof obj.constraints === 'object' && !Array.isArray(obj.constraints)) ? obj.constraints as Record<string, unknown> : {};
 	    const must_keep = Array.isArray(obj.must_keep) ? obj.must_keep : def.must_keep;
 	    const may_change = Array.isArray(obj.may_change) ? obj.may_change : def.may_change;
+	    const height = typeof obj.height_cm === 'number' ? obj.height_cm : def.height_cm;
 	    return {
 	      mode: (['USE_EXISTING_CUTOUT', 'REMOVE_BACKGROUND', 'GENERATE_NEW', 'RESTYLE_REFERENCE'].includes(mode) ? mode : def.mode) as StudioReferenceMode,
 	      nickname: typeof obj.nickname === 'string' ? obj.nickname : def.nickname,
-	      preset: (['profile', 'turnaround_sheet', 'expressions', '3d_modeling', 'live2d', 'all'].includes(preset) ? preset : def.preset) as StudioReferencePreset,
 	      style_target: typeof obj.style_target === 'string' ? obj.style_target : def.style_target,
+	      age_group: typeof obj.age_group === 'string' ? obj.age_group : def.age_group,
+	      gender: typeof obj.gender === 'string' ? obj.gender : def.gender,
+	      height_cm: height,
 	      must_keep: (must_keep as StudioReferenceState['must_keep']).filter(Boolean),
 	      may_change: (may_change as StudioReferenceState['may_change']).filter(Boolean),
-	      identity_locks: {
-	        hair: typeof identity.hair === 'string' ? identity.hair : def.identity_locks.hair,
-	        eyes: typeof identity.eyes === 'string' ? identity.eyes : def.identity_locks.eyes,
-	        outfit_silhouette: typeof identity.outfit_silhouette === 'string' ? identity.outfit_silhouette : def.identity_locks.outfit_silhouette,
-	        distinctive_marks: typeof identity.distinctive_marks === 'string' ? identity.distinctive_marks : def.identity_locks.distinctive_marks,
-	      },
 	      palette: {
 	        primary: typeof palette.primary === 'string' ? palette.primary : def.palette.primary,
 	        secondary: typeof palette.secondary === 'string' ? palette.secondary : def.palette.secondary,
@@ -351,14 +347,16 @@ const SectionHeader = ({
   kicker,
   title,
   subtitle,
-  right
+  right,
+  className
 }: {
   kicker: string;
   title: string;
   subtitle?: string;
   right?: React.ReactNode;
+  className?: string;
 }) => (
-  <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6">
+  <div className={`flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 ${className || ''}`}>
     <div className="space-y-3">
       <span className="ui-label">{kicker}</span>
       <h2 className="ui-title">{title}</h2>
@@ -1367,6 +1365,12 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const [turnaroundCutoutUrls, setTurnaroundCutoutUrls] = useState<Partial<Record<StudioReferenceView, string>>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const translatingRef = useRef(false);
+  const [isZipDownloading, setIsZipDownloading] = useState(false);
+  const [gridProgress, setGridProgress] = useState<{ current: number; total: number; label: string } | null>(null);
+  const [selectedTileIndex, setSelectedTileIndex] = useState<number | null>(null);
+  const [tileEditPrompt, setTileEditPrompt] = useState('');
+  const [isTileRegenerating, setIsTileRegenerating] = useState(false);
+  const [tileOverrideAngle, setTileOverrideAngle] = useState('');
 
   const handleImgUpload = async (file: File) => {
     const reader = new FileReader();
@@ -1416,6 +1420,169 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
     return t.split(/[,\n]/g).map(s => s.trim()).filter(Boolean).slice(0, 12);
   }, [referenceState.style_target]);
 
+  const styleBasePresets = useMemo(() => ([
+    {
+      id: 'realistic',
+      label: '실사/리얼',
+      value: 'photorealistic, natural skin, realistic lighting, high fidelity detail',
+    },
+    {
+      id: 'anime_jp',
+      label: '일본 애니',
+      value: 'Japanese anime, clean line art, crisp cel shading, vivid eyes',
+    },
+    {
+      id: 'us_cartoon',
+      label: '미국 카툰',
+      value: 'American cartoon style, bold outlines, simplified shapes, flat shading',
+    },
+    {
+      id: 'webtoon',
+      label: '웹툰',
+      value: 'Korean webtoon style, soft shading, tidy line art, balanced pastel tones',
+    },
+    {
+      id: 'illustration',
+      label: '일러스트',
+      value: 'editorial illustration, painterly brushwork, soft gradients, refined textures',
+    },
+    {
+      id: 'render_3d',
+      label: '3D 렌더',
+      value: '3D character render, PBR materials, studio lighting, clean geometry',
+    },
+  ]), []);
+
+  const styleModifiers = useMemo(() => ([
+    'high detail',
+    'soft lighting',
+    'cinematic lighting',
+    'strong cel shading',
+    'clean line art',
+    'bold outlines',
+    'flat shading',
+    'pastel palette',
+    'high contrast',
+    'smooth skin',
+    'textured fabric',
+    'sharp silhouette',
+    'soft shadows',
+    'minimal background',
+  ]), []);
+
+  const normalizeStyleTag = useCallback((tag: string) => tag.toLowerCase().replace(/\s+/g, ' ').trim(), []);
+
+  const applyBaseStylePreset = useCallback((value: string) => {
+    setReferenceState((prev) => ({ ...prev, style_target: value }));
+  }, [setReferenceState]);
+
+  const toggleStyleModifier = useCallback((tag: string) => {
+    const normalized = normalizeStyleTag(tag);
+    const existing = styleTags.map(normalizeStyleTag);
+    if (existing.includes(normalized)) {
+      const next = styleTags.filter((t) => normalizeStyleTag(t) !== normalized);
+      setReferenceState((prev) => ({ ...prev, style_target: next.join(', ') }));
+      return;
+    }
+    const next = [...styleTags, tag];
+    setReferenceState((prev) => ({ ...prev, style_target: next.join(', ') }));
+  }, [normalizeStyleTag, setReferenceState, styleTags]);
+
+  const gridCutoutUrls = useMemo(() => {
+    const urls = referenceState.metadata?.generated_assets?.grid_cutout_urls;
+    if (!Array.isArray(urls)) return [];
+    return urls.filter((u) => typeof u === 'string' && u.trim().length > 0);
+  }, [referenceState.metadata]);
+
+  const gridSourceUrl = useMemo(() => {
+    const url = referenceState.metadata?.generated_assets?.grid_source_url;
+    if (typeof url !== 'string') return '';
+    return url.trim();
+  }, [referenceState.metadata]);
+
+  const tileSpecs = useMemo(() => ([
+    { index: 0, label: '1', shot: 'upper-body', angle: '0°', view: 'front' },
+    { index: 1, label: '2', shot: 'full-body', angle: '0°', view: 'front' },
+    { index: 2, label: '3', shot: 'full-body', angle: '+45°', view: 'right 45°' },
+    { index: 3, label: '4', shot: 'full-body', angle: '+90°', view: 'right profile' },
+    { index: 4, label: '5', shot: 'full-body', angle: '+135°', view: 'right back 3/4' },
+    { index: 5, label: '6', shot: 'full-body', angle: '+180°', view: 'back' },
+    { index: 6, label: '7', shot: 'full-body', angle: '-45°', view: 'left 45°' },
+    { index: 7, label: '8', shot: 'full-body', angle: '-90°', view: 'left profile' },
+    { index: 8, label: '9', shot: 'full-body', angle: '-135°', view: 'left back 3/4' },
+  ]), []);
+
+  const tileAngleOptions = useMemo(() => ([
+    { value: '0°', label: '0° 정면' },
+    { value: '+45°', label: '+45° 우전면' },
+    { value: '+90°', label: '+90° 우측면' },
+    { value: '+135°', label: '+135° 우후면' },
+    { value: '180°', label: '180° 후면' },
+    { value: '-45°', label: '-45° 좌전면' },
+    { value: '-90°', label: '-90° 좌측면' },
+    { value: '-135°', label: '-135° 좌후면' },
+  ]), []);
+
+  const tileAngleViewMap = useMemo(() => ({
+    '0°': 'front',
+    '+45°': 'right 45°',
+    '+90°': 'right profile',
+    '+135°': 'right back 3/4',
+    '180°': 'back',
+    '-45°': 'left 45°',
+    '-90°': 'left profile',
+    '-135°': 'left back 3/4',
+  } as Record<string, string>), []);
+
+  useEffect(() => {
+    if (selectedTileIndex == null) return;
+    if (selectedTileIndex >= gridCutoutUrls.length) {
+      setSelectedTileIndex(null);
+      setTileEditPrompt('');
+      setTileOverrideAngle('');
+    }
+  }, [gridCutoutUrls.length, selectedTileIndex]);
+
+
+
+  const randomCharacterSeedSets = useMemo(() => ({
+    namePrefixes: ['Nova', 'Lumi', 'Rin', 'Mika', 'Sora', 'Ari', 'Theo', 'Kana', 'Milo', 'Yuna', 'Haru', 'Ciel'],
+    nameSuffixes: ['Fox', 'Vale', 'Mint', 'Ray', 'Bloom', 'Drift', 'Core', 'Wave', 'Echo', 'Spark', 'Leaf', 'Tone'],
+    ages: ['late teens', 'early 20s', 'mid 20s', 'late 20s', 'early 30s'],
+    genders: ['female', 'male', 'androgynous'],
+    heights: [155, 160, 165, 170, 175],
+    styleTargets: [
+      'clean 2D anime, cel shading, crisp line art, studio lighting, plain white background, high character consistency',
+      'stylized semi-realistic avatar, polished facial features, soft global illumination, neutral white seamless backdrop, production-ready reference sheet',
+      'bright game-ready mascot design, readable silhouette, vivid color blocking, tidy rendering, front-facing character sheet look',
+      'premium VTuber character design, elegant proportions, smooth cel shading, clean rim light, high-detail costume read, plain background',
+      'modern webtoon-inspired character art, sharp contour lines, balanced pastel contrast, soft key light, reusable avatar reference aesthetic',
+      'cinematic 3D animation concept render, simplified materials, precise silhouette separation, soft studio shadows, neutral reference-board composition',
+    ],
+    palettes: [
+      { primary: '#1F2937', secondary: '#F3F4F6', accent: '#60A5FA' },
+      { primary: '#111827', secondary: '#E5E7EB', accent: '#F59E0B' },
+      { primary: '#2B2D42', secondary: '#EDF2F4', accent: '#EF476F' },
+      { primary: '#243B53', secondary: '#F7F3E9', accent: '#2EC4B6' },
+      { primary: '#2D1E2F', secondary: '#F8F7FF', accent: '#8AC926' },
+      { primary: '#22333B', secondary: '#FAF9F6', accent: '#E76F51' },
+    ],
+    constraints: [
+      'text',
+      'watermark',
+      'logo',
+      'busy background',
+      'multiple characters',
+      'cropped head',
+      'cropped feet',
+      'extra fingers',
+      'deformed hands',
+      'low-detail face',
+      'muddy shadows',
+      'extreme perspective',
+    ],
+  }), []);
+
   const normalizeHexColor = useCallback((value: string) => {
     const v = (value || '').trim();
     if (!v) return null;
@@ -1428,12 +1595,268 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
   const containsKorean = useCallback((text: string) => /[가-힣]/.test(text || ''), []);
 
-	  const viewKo: Record<StudioReferenceView, string> = {
-	    front: '정면',
-	    side_right: '옆모습(오른쪽)',
-	    back: '뒷모습',
-	    three_quarter_front: '3/4 정면',
-	  };
+  const pickOne = useCallback(<T,>(items: T[]): T => items[Math.floor(Math.random() * items.length)], []);
+
+  const buildRandomNickname = useCallback(() => {
+    const prefix = pickOne(randomCharacterSeedSets.namePrefixes);
+    const suffix = pickOne(randomCharacterSeedSets.nameSuffixes);
+    const serial = String(Math.floor(Math.random() * 90) + 10);
+    return `${prefix}${suffix}_${serial}`;
+  }, [pickOne, randomCharacterSeedSets]);
+
+  const pickMany = useCallback(<T,>(items: T[], min: number, max: number): T[] => {
+    const pool = [...items];
+    const count = Math.max(min, Math.min(pool.length, Math.floor(Math.random() * (max - min + 1)) + min));
+    const chosen: T[] = [];
+    while (pool.length > 0 && chosen.length < count) {
+      const idx = Math.floor(Math.random() * pool.length);
+      chosen.push(pool.splice(idx, 1)[0]);
+    }
+    return chosen;
+  }, []);
+
+  const fillRandomReferenceFields = useCallback(() => {
+    if (referenceState.mode !== 'GENERATE_NEW') return;
+
+    const randomStyleParts = pickMany(randomCharacterSeedSets.styleTargets, 1, 2);
+    const randomPalette = pickOne(randomCharacterSeedSets.palettes);
+    const randomConstraints = pickMany(randomCharacterSeedSets.constraints, 5, 7);
+    const mustKeepPool = ['face', 'hair', 'outfit', 'colors', 'body_type', 'accessories'] as StudioReferenceState['must_keep'];
+    const mayChangePool = ['outfit', 'colors', 'hairstyle', 'accessories', 'material', 'mood'] as StudioReferenceState['may_change'];
+    const nextMustKeep = pickMany(mustKeepPool, 3, 5) as StudioReferenceState['must_keep'];
+    const nextMayChange = pickMany(mayChangePool, 1, 3) as StudioReferenceState['may_change'];
+    const nextNickname = buildRandomNickname();
+    const nextStyleTarget = randomStyleParts.join(', ');
+    const nextAge = pickOne(randomCharacterSeedSets.ages);
+    const nextGender = pickOne(randomCharacterSeedSets.genders);
+    const nextHeight = pickOne(randomCharacterSeedSets.heights);
+
+    setReferenceState((prev) => ({
+      ...prev,
+      nickname: nextNickname,
+      style_target: nextStyleTarget,
+      age_group: nextAge,
+      gender: nextGender,
+      height_cm: nextHeight,
+      must_keep: nextMustKeep,
+      may_change: nextMayChange,
+      palette: {
+        primary: randomPalette.primary,
+        secondary: randomPalette.secondary,
+        accent: randomPalette.accent,
+      },
+      constraints: {
+        must_not_have: randomConstraints,
+      },
+      metadata: null,
+    }));
+    setShowAdvanced(true);
+    showToast('GENERATE_NEW용 랜덤 캐릭터 설정을 새로 채웠습니다.');
+  }, [buildRandomNickname, pickMany, pickOne, randomCharacterSeedSets, referenceState.mode, setReferenceState, showToast]);
+
+  const downloadReferenceZip = useCallback(async () => {
+    const zipItems: Array<{ url: string; label: string }> = [];
+    if (gridCutoutUrls.length > 0) {
+      gridCutoutUrls.forEach((url, idx) => {
+        zipItems.push({ url, label: `${String(idx + 1).padStart(2, '0')}_reference` });
+      });
+    } else if (referenceImageUrl) {
+      zipItems.push({ url: referenceImageUrl, label: '01_reference' });
+    }
+
+    if (zipItems.length === 0) {
+      showToast('다운로드할 레퍼런스 이미지가 없습니다.');
+      return;
+    }
+    const nickname = (referenceState.nickname || 'character').trim() || 'character';
+    const safeNickname = nickname.replace(/[^a-zA-Z0-9_-]+/g, '_');
+    const zipName = `weav_reference_${safeNickname}.zip`;
+
+    const guessExt = (url: string, mime: string | undefined) => {
+      const type = (mime || '').toLowerCase();
+      if (type.includes('png')) return 'png';
+      if (type.includes('jpeg') || type.includes('jpg')) return 'jpg';
+      if (type.includes('webp')) return 'webp';
+      const m = url.match(/\.(png|jpg|jpeg|webp)(\?|$)/i);
+      if (m) return m[1].toLowerCase().replace('jpeg', 'jpg');
+      return 'png';
+    };
+
+    setIsZipDownloading(true);
+    try {
+      const zip = new JSZip();
+      const folder = zip.folder(`weav_reference_${safeNickname}`) ?? zip;
+      for (let i = 0; i < zipItems.length; i += 1) {
+        const targetUrl = zipItems[i].url;
+        const res = await fetch(targetUrl);
+        if (!res.ok) throw new Error(`download failed: ${targetUrl}`);
+        const blob = await res.blob();
+        const ext = guessExt(targetUrl, blob.type);
+        const fileName = `${zipItems[i].label}.${ext}`;
+        folder.file(fileName, blob);
+      }
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = zipName;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast('레퍼런스 압축 파일 다운로드가 시작되었습니다.');
+    } catch (e) {
+      console.error(e);
+      showToast('레퍼런스 압축 다운로드에 실패했습니다.');
+    } finally {
+      setIsZipDownloading(false);
+    }
+  }, [gridCutoutUrls, gridSourceUrl, referenceImageUrl, referenceState.nickname, showToast]);
+
+  const buildTilePromptEn = useCallback((opts: { spec: { shot: string; angle?: string; view?: string }; styleTargetEn: string; userNote?: string }) => {
+    const { spec, styleTargetEn, userNote } = opts;
+    const palette = referenceState.palette;
+    const paletteParts = [
+      palette.primary ? `primary ${palette.primary}` : null,
+      palette.secondary ? `secondary ${palette.secondary}` : null,
+      palette.accent ? `accent ${palette.accent}` : null,
+    ].filter(Boolean).join(', ');
+    const ageGroup = (referenceState.age_group || '').trim();
+    const gender = (referenceState.gender || '').trim();
+    const height = referenceState.height_cm;
+    const base = [
+      'You are a senior avatar/character reference artist and production designer.',
+      'Single character only. No text, no labels, no borders, no grid.',
+      'Solid light gray background, seamless (no horizon line, no gradient).',
+      'Even studio lighting, soft shadows only.',
+      'Consistent scale and proportions across panels of the same sheet.',
+      'Preserve the original image EXACTLY: same outfit, materials, accessories, hair, face, makeup, body proportions, lighting, color grading, background, and render style.',
+      'Keep the EXACT same pose, stance, and expression unless the user request says otherwise.',
+      'Rotate the entire body to the requested direction, not just the head.',
+      'The character must be standing upright (no sitting, kneeling, crouching, or leaning).',
+      'Hands must be empty; do not hold any objects or phones.',
+      'Outfit must remain identical to the reference image (same clothing, colors, materials, accessories). Do NOT change wardrobe.',
+      `Shot type: ${spec.shot === 'upper-body' ? 'upper-body (about 60% frame height)' : 'full-body head-to-toe, fully visible inside the frame'}.`,
+      spec.angle ? `Yaw angle: ${spec.angle}${spec.view ? ` (${spec.view})` : ''}.` : null,
+      ageGroup ? `apparent age: ${ageGroup}` : null,
+      gender ? `gender presentation: ${gender}` : null,
+      height ? `approx height: ${height} cm` : null,
+      styleTargetEn ? `style target: ${styleTargetEn}` : null,
+      paletteParts ? `palette: ${paletteParts}` : null,
+      userNote ? `User request: ${userNote}` : null,
+    ].filter(Boolean).join(' ');
+    const negative = [
+      'text',
+      'watermark',
+      'logo',
+      'multiple characters',
+      'busy background',
+      'uneven lighting',
+      'cropped head',
+      'cropped feet',
+      'missing head',
+      'missing feet',
+      'half-body',
+      'truncated body',
+      'deformed hands',
+      'extra fingers',
+      'outfit change',
+      'wardrobe change',
+      'costume change',
+      'style change',
+      'lighting change',
+      'color grading change',
+      'background change',
+      'different materials',
+      'different accessories',
+      'phone',
+      'smartphone',
+      'holding objects',
+    ].join(', ');
+    return `${base}. Avoid: ${negative}.`;
+  }, [referenceState.age_group, referenceState.gender, referenceState.height_cm, referenceState.palette]);
+
+  const withCacheBust = useCallback((url: string) => {
+    if (!url) return url;
+    return url.includes('?') ? `${url}&v=${Date.now()}` : `${url}?v=${Date.now()}`;
+  }, []);
+
+  const regenerateTile = useCallback(async () => {
+    if (selectedTileIndex == null) return;
+    if (!gridCutoutUrls[selectedTileIndex]) return showToast('선택된 타일 이미지가 없습니다.');
+    const note = tileEditPrompt.trim();
+    const overrideAngle = tileOverrideAngle.trim();
+    if (!note && !overrideAngle) return showToast('수정 요청을 입력하거나 방향을 재지정해 주세요.');
+    const spec = tileSpecs[selectedTileIndex];
+    if (!spec) return showToast('타일 정보가 없습니다.');
+    const finalSpec = overrideAngle
+      ? { ...spec, angle: overrideAngle, view: tileAngleViewMap[overrideAngle] || spec.view }
+      : { ...spec, angle: undefined, view: undefined };
+    const referenceForTile = overrideAngle
+      ? (baseFrontCutoutUrl || gridCutoutUrls[1] || gridCutoutUrls[selectedTileIndex])
+      : gridCutoutUrls[selectedTileIndex];
+
+    setIsTileRegenerating(true);
+    try {
+      const noteEn = note
+        ? (containsKorean(note) ? (await translateToEnglish(note)) || note : note)
+        : '';
+      const angleNote = overrideAngle
+        ? `Change the facing direction to ${finalSpec.angle}${finalSpec.view ? ` (${finalSpec.view})` : ''}. Do not keep the original facing direction.`
+        : '';
+      const mergedNote = [angleNote, noteEn].filter(Boolean).join(' ').trim();
+      const styleTargetRaw = (referenceState.style_target || '').trim();
+      const styleTargetEn =
+        styleTargetRaw && containsKorean(styleTargetRaw) ? (await translateToEnglish(styleTargetRaw)) || styleTargetRaw : styleTargetRaw;
+      const prompt = buildTilePromptEn({ spec: finalSpec, styleTargetEn, userNote: mergedNote || undefined });
+      const res = await studioImage({
+        prompt,
+        model: 'fal-ai/gemini-3-pro-image-preview',
+        aspect_ratio: '9:16',
+        num_images: 1,
+        ...(referenceForTile ? { reference_image_url: referenceForTile } : {}),
+        resolution: '4K',
+        output_format: 'png',
+      });
+      const nextUrl = res.images?.[0]?.url;
+      if (!nextUrl) throw new Error('tile image url missing');
+      const updatedUrl = withCacheBust(nextUrl);
+      setReferenceState((prev) => {
+        const meta = prev.metadata;
+        if (!meta) return prev;
+        const current = Array.isArray(meta.generated_assets?.grid_cutout_urls) ? [...meta.generated_assets!.grid_cutout_urls!] : [];
+        current[selectedTileIndex] = updatedUrl;
+        return {
+          ...prev,
+          metadata: {
+            ...meta,
+            generated_assets: {
+              ...meta.generated_assets,
+              grid_cutout_urls: current,
+            },
+          },
+        };
+      });
+      showToast(`타일 ${finalSpec.label} 재생성이 완료되었습니다.`);
+    } catch (e) {
+      console.error(e);
+      showToast('타일 재생성에 실패했습니다.');
+    } finally {
+      setIsTileRegenerating(false);
+    }
+  }, [
+    buildTilePromptEn,
+    baseFrontCutoutUrl,
+    containsKorean,
+    gridCutoutUrls,
+    referenceState.style_target,
+    selectedTileIndex,
+    showToast,
+    tileEditPrompt,
+    tileAngleViewMap,
+    tileOverrideAngle,
+    tileSpecs,
+    withCacheBust,
+  ]);
+
 
 	  const mustKeepOptions = ['face', 'hair', 'outfit', 'colors', 'body_type', 'accessories'] as const;
 	  const mayChangeOptions = ['outfit', 'colors', 'hairstyle', 'accessories', 'material', 'mood'] as const;
@@ -1484,30 +1907,25 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 	  const runPipeline = useCallback(async () => {
 	    const nickname = (referenceState.nickname || '').trim();
 	    if (!nickname) return showToast('캐릭터 별명을 입력해 주세요.');
+	    if (referenceState.mode === 'GENERATE_NEW') {
+	      const ageGroup = (referenceState.age_group || '').trim();
+	      const gender = (referenceState.gender || '').trim();
+	      const height = referenceState.height_cm;
+	      if (!ageGroup || !gender || !height) {
+	        return showToast('나이/성별/키 정보를 선택해 주세요.');
+	      }
+	    }
 
 	    setIsWorking(true);
 	    setWorkStatus('준비 중...');
 	    try {
       const styleTargetRaw = (referenceState.style_target || '').trim();
-      const locksRaw = referenceState.identity_locks;
       const styleTargetEn =
         styleTargetRaw && containsKorean(styleTargetRaw) ? (await translateToEnglish(styleTargetRaw)) || styleTargetRaw : styleTargetRaw;
-      const locksEn = {
-        hair: locksRaw.hair && containsKorean(locksRaw.hair) ? (await translateToEnglish(locksRaw.hair)) || locksRaw.hair : locksRaw.hair,
-        eyes: locksRaw.eyes && containsKorean(locksRaw.eyes) ? (await translateToEnglish(locksRaw.eyes)) || locksRaw.eyes : locksRaw.eyes,
-        outfit_silhouette: locksRaw.outfit_silhouette && containsKorean(locksRaw.outfit_silhouette)
-          ? (await translateToEnglish(locksRaw.outfit_silhouette)) || locksRaw.outfit_silhouette
-          : locksRaw.outfit_silhouette,
-        distinctive_marks: locksRaw.distinctive_marks && containsKorean(locksRaw.distinctive_marks)
-          ? (await translateToEnglish(locksRaw.distinctive_marks)) || locksRaw.distinctive_marks
-          : locksRaw.distinctive_marks,
-      };
 
-	      const preset = referenceState.preset;
-	      const wantsTurnaround = preset === 'turnaround_sheet' || preset === 'all';
-	      const views: StudioReferenceView[] = ['front', 'side_right', 'back', 'three_quarter_front'];
 	      const model = 'fal-ai/gemini-3-pro-image-preview';
 	      const aspectRatio = '9:16';
+	      const resolution = '4K' as const;
 
 	      const mustKeepEnLabel: Record<(typeof mustKeepOptions)[number], string> = {
 	        face: 'face',
@@ -1526,64 +1944,142 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 	        mood: 'mood/atmosphere',
 	      };
 
-	      const buildPromptEn = (view: StudioReferenceView) => {
+	      const buildGridPromptEn = (opts?: { mode?: 'generate' | 'restyle'; referenceHint?: string }) => {
+	        const mode = opts?.mode ?? 'generate';
+	        const referenceHint = (opts?.referenceHint || '').trim();
 	        const persona = [
 	          'You are a senior avatar/character reference artist and production designer.',
-	          'You specialize in creating consistent, reusable character reference assets for generative image models.',
-	          'Prioritize consistency over novelty.',
+	          'Create a single 3x3 reference grid with nine panels for one character.',
+	          'All panels must show the SAME character with strict identity consistency.',
 	        ].join(' ');
-	        const viewToken =
-	          view === 'front' ? 'front view' :
-	          view === 'side_right' ? 'right side profile view (facing right)' :
-	          view === 'back' ? 'back view' :
-	          'three-quarter front view';
 	        const palette = referenceState.palette;
-        const lockParts = [
-          locksEn.hair ? `hair: ${locksEn.hair}` : null,
-          locksEn.eyes ? `eyes: ${locksEn.eyes}` : null,
-          locksEn.outfit_silhouette ? `outfit silhouette: ${locksEn.outfit_silhouette}` : null,
-          locksEn.distinctive_marks ? `distinctive marks: ${locksEn.distinctive_marks}` : null,
-        ].filter(Boolean).join('; ');
 	        const paletteParts = [
 	          palette.primary ? `primary ${palette.primary}` : null,
 	          palette.secondary ? `secondary ${palette.secondary}` : null,
 	          palette.accent ? `accent ${palette.accent}` : null,
 	        ].filter(Boolean).join(', ');
+	        const ageGroup = (referenceState.age_group || '').trim();
+	        const gender = (referenceState.gender || '').trim();
+	        const height = referenceState.height_cm;
 	        const variationPolicy = referenceState.mode === 'RESTYLE_REFERENCE'
 	          ? [
 	              `Identity policy: must keep ${referenceState.must_keep.map((k) => mustKeepEnLabel[k]).join(', ') || 'identity'}.`,
 	              `May change ${referenceState.may_change.map((k) => mayChangeEnLabel[k]).join(', ') || 'nothing'} only when it does not break identity.`,
 	            ].join(' ')
 	          : null;
-	        const modeIntent = referenceState.mode === 'RESTYLE_REFERENCE'
-	          ? 'Restyle the same character while preserving identity.'
-	          : 'Create a clean character reference suitable as a reusable reference.'
 	        const positive = [
 	          persona,
-	          modeIntent,
-	          'single character',
-	          'full body',
-	          'orthographic-like',
-	          'consistent scale',
-	          viewToken,
-	          'clean plain white background',
-	          'no text, no watermark',
-	          'same character, consistent identity',
+	          'Single character only.',
+          'Create a 3x3 grid layout with equal-sized cells.',
+          'No borders, no labels, no text.',
+          'Solid light gray background, seamless (no horizon line, no gradient).',
+          'Even studio lighting, soft shadows only.',
+          'Consistent scale and proportions across panels.',
+          'All panels must keep the EXACT same pose, stance, and expression. Only rotate the character; do not change pose.',
+          'The character must be standing upright in every panel (no sitting, kneeling, crouching, or leaning).',
+          'Hands must be empty; do not hold any objects or phones.',
+          'Outfit must remain identical across all panels (same clothing, colors, materials, accessories).',
+          'Each panel must be a UNIQUE angle; do not duplicate, mirror, or swap panel assignments.',
+          'If any panel repeats an angle, the entire grid is invalid and must be regenerated with correct angles.',
+	          'Define 0° as the character facing the camera directly (eyes toward camera).',
+	          'Rotate clockwise by exactly 45° per step for the sequence below.',
+          'Panel order left-to-right, top-to-bottom:',
+          'Use yaw angles relative to panel 2 (full-body front) as 0°: right = +, left = -. Rotate the entire body, not just the head.',
+	          '1) Front-facing upper-body shot (about 60% of frame height), 0°.',
+	          '2) Front-facing full-body shot, 0°.',
+	          '3) Based on panel 2, full-body shot rotated +45° (right 45°) ↘.',
+	          '4) Based on panel 2, full-body shot rotated +90° (right side profile) →.',
+	          '5) Based on panel 2, full-body shot rotated +135° (right back 3/4) ↗.',
+	          '6) Based on panel 2, full-body shot rotated +180° (back view) ↑.',
+	          '7) Based on panel 2, full-body shot rotated -45° (left 45°) ↙.',
+	          '8) Based on panel 2, full-body shot rotated -90° (left side profile) ←.',
+	          '9) Based on panel 2, full-body shot rotated -135° (left back 3/4) ↖.',
+	          'Panel 1 is upper-body only; panels 2-9 must be full-body head-to-toe with the entire body fully visible inside the frame.',
+	          mode === 'restyle'
+	            ? 'Restyle the reference character but keep identical facial structure, hairstyle silhouette, outfit silhouette, proportions, and key accessories across all panels.'
+	            : null,
+	          referenceHint ? `Reference: ${referenceHint}` : null,
+	          ageGroup ? `apparent age: ${ageGroup}` : null,
+	          gender ? `gender presentation: ${gender}` : null,
+	          height ? `approx height: ${height} cm` : null,
 	          styleTargetEn ? `style target: ${styleTargetEn}` : 'style target: clean studio render, neutral lighting, simple shading',
-	          lockParts ? `identity locks: ${lockParts}` : null,
 	          paletteParts ? `palette: ${paletteParts}` : null,
 	          variationPolicy,
-	        ].filter(Boolean).join('. ');
-	        const negative = 'extra limbs, extra fingers, deformed hands, inconsistent face, different outfit, multiple characters, text, watermark, logo, cropped head, cropped feet, extreme perspective, busy background';
+	        ].filter(Boolean).join(' ');
+        const negative = [
+          'text',
+          'watermark',
+          'logo',
+          'multiple characters',
+          'busy background',
+          'uneven lighting',
+          'cropped head',
+          'cropped feet',
+          'missing head',
+          'missing feet',
+          'half-body',
+          'truncated body',
+          'deformed hands',
+          'extra fingers',
+          'outfit change',
+          'wardrobe change',
+          'costume change',
+          'phone',
+          'smartphone',
+          'holding objects',
+        ].join(', ');
 	        return `${positive}. Avoid: ${negative}.`;
+	      };
+
+	      const sliceGridImage = async (gridUrl: string) => {
+	        const res = await fetch(gridUrl);
+	        if (!res.ok) throw new Error('grid fetch failed');
+	        const blob = await res.blob();
+	        const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+	          const image = new Image();
+	          image.onload = () => resolve(image);
+	          image.onerror = () => reject(new Error('grid load failed'));
+	          image.src = URL.createObjectURL(blob);
+	        });
+	        const width = img.width;
+	        const height = img.height;
+	        const cellW = Math.floor(width / 3);
+	        const cellH = Math.floor(height / 3);
+	        const tiles: Blob[] = [];
+	        for (let r = 0; r < 3; r += 1) {
+	          for (let c = 0; c < 3; c += 1) {
+	            const canvas = document.createElement('canvas');
+	            canvas.width = cellW;
+	            canvas.height = cellH;
+	            const ctx = canvas.getContext('2d');
+	            if (!ctx) throw new Error('canvas not available');
+	            ctx.drawImage(
+	              img,
+	              c * cellW,
+	              r * cellH,
+	              cellW,
+	              cellH,
+	              0,
+	              0,
+	              cellW,
+	              cellH
+	            );
+	            const tile = await new Promise<Blob>((resolve, reject) => {
+	              canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('tile blob failed'))), 'image/png');
+	            });
+	            tiles.push(tile);
+	          }
+	        }
+	        return tiles;
 	      };
 
       const setMeta = (partial: any) => {
         const meta = {
           nickname,
-          preset,
           style_tags: styleTags,
-          identity_locks: referenceState.identity_locks,
+          age_group: referenceState.age_group,
+          gender: referenceState.gender,
+          height_cm: referenceState.height_cm,
           palette: referenceState.palette,
           constraints: referenceState.constraints,
           allowed_variations: { must_keep: referenceState.must_keep, may_change: referenceState.may_change },
@@ -1603,77 +2099,65 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
       if (referenceState.mode === 'USE_EXISTING_CUTOUT') {
         if (!sourceImageUrl) return showToast('컷아웃(투명 PNG 등) 이미지를 업로드해 주세요.');
         setWorkStatus('컷아웃 레퍼런스 저장 중...');
+        setBaseFrontUrl('');
+        setBaseFrontCutoutUrl('');
+        setTurnaroundUrls({});
+        setTurnaroundCutoutUrls({});
         setReferenceImageUrl(sourceImageUrl);
-        const meta = setMeta({ generated_assets: { source_image_url: sourceImageUrl, base_front_cutout_url: sourceImageUrl } });
+        setMeta({ generated_assets: { source_image_url: sourceImageUrl, base_front_cutout_url: sourceImageUrl } });
         showToast('레퍼런스가 저장되었습니다.');
-        downloadJson(`weav_reference_${nickname}.json`, meta);
         return;
       }
 
       if (referenceState.mode === 'REMOVE_BACKGROUND') {
-        if (!sourceImageUrl) return showToast('배경 제거할 이미지를 업로드해 주세요.');
-        setWorkStatus('배경 제거 중...');
-        const { image } = await studioBgRemove(sourceImageUrl, { crop_to_bbox: referenceState.crop_to_bbox });
-        setBaseFrontCutoutUrl(image.url);
-        setReferenceImageUrl(image.url);
-        const meta = setMeta({ generated_assets: { source_image_url: sourceImageUrl, base_front_cutout_url: image.url } });
-        showToast('배경 제거가 완료되었습니다.');
-        downloadJson(`weav_reference_${nickname}.json`, meta);
+        showToast('배경 제거 기능은 비활성화되었습니다. 컷아웃 이미지를 직접 업로드해 주세요.');
         return;
       }
 
       if (referenceState.mode === 'GENERATE_NEW') {
-        setWorkStatus('베이스(정면) 생성 중...');
-        const basePrompt = buildPromptEn('front');
-        const baseRes = await studioImage({ prompt: basePrompt, model, aspect_ratio: aspectRatio, num_images: 1 });
-        const url = baseRes.images?.[0]?.url;
-        if (!url) throw new Error('base image url missing');
-        setBaseFrontUrl(url);
+        setWorkStatus('레퍼런스 그리드 생성 중...');
+        setGridProgress(null);
+        setBaseFrontUrl('');
+        setBaseFrontCutoutUrl('');
+        setTurnaroundUrls({});
+        setTurnaroundCutoutUrls({});
+        const gridPrompt = buildGridPromptEn({ mode: 'generate' });
+        const gridRes = await studioImage({
+          prompt: gridPrompt,
+          model,
+          aspect_ratio: aspectRatio,
+          num_images: 1,
+          resolution,
+          output_format: 'png',
+        });
+        const gridUrl = gridRes.images?.[0]?.url;
+        if (!gridUrl) throw new Error('grid image url missing');
 
-        setWorkStatus('베이스(정면) 배경 제거 중...');
-        const { image } = await studioBgRemove(url, { crop_to_bbox: referenceState.crop_to_bbox });
-        setBaseFrontCutoutUrl(image.url);
-        setReferenceImageUrl(image.url);
-
-        let nextTurnaround: Partial<Record<StudioReferenceView, string>> = {};
-        let nextTurnaroundCutouts: Partial<Record<StudioReferenceView, string>> = {};
-        if (wantsTurnaround) {
-          for (const v of views) {
-            if (v === 'front') continue;
-            setWorkStatus(`턴어라운드 생성 중... (${viewKo[v] || v})`);
-            const prompt = buildPromptEn(v);
-            const res = await studioImage({
-              prompt,
-              model,
-              aspect_ratio: aspectRatio,
-              num_images: 1,
-              reference_image_url: url,
-            });
-            const outUrl = res.images?.[0]?.url;
-            if (!outUrl) continue;
-            nextTurnaround = { ...nextTurnaround, [v]: outUrl };
-            setTurnaroundUrls(nextTurnaround);
-            try {
-              setWorkStatus(`턴어라운드 배경 제거 중... (${viewKo[v] || v})`);
-              const cut = await studioBgRemove(outUrl, { crop_to_bbox: referenceState.crop_to_bbox });
-              nextTurnaroundCutouts = { ...nextTurnaroundCutouts, [v]: cut.image.url };
-              setTurnaroundCutoutUrls(nextTurnaroundCutouts);
-            } catch {
-              /* ignore */
-            }
-          }
+        setWorkStatus('그리드 9분할 중...');
+        const tiles = await sliceGridImage(gridUrl);
+        const cutouts: string[] = [];
+        for (let i = 0; i < tiles.length; i += 1) {
+          setGridProgress({ current: i + 1, total: tiles.length, label: '타일 업로드' });
+          setWorkStatus(`타일 업로드 중... (${i + 1}/9)`);
+          const tileFile = new File([tiles[i]], `weav_reference_${nickname}_tile_${i + 1}.png`, { type: 'image/png' });
+          const uploaded = await uploadStudioReferenceImage(tileFile);
+          cutouts.push(uploaded.url);
         }
 
-        const meta = setMeta({
+        const primaryCutout = cutouts[1] || cutouts[0] || '';
+        setBaseFrontCutoutUrl(primaryCutout);
+        setReferenceImageUrl(primaryCutout);
+
+        setMeta({
           generated_assets: {
-            base_front_url: url,
-            base_front_cutout_url: image.url,
-            turnaround_urls: nextTurnaround,
-            turnaround_cutout_urls: nextTurnaroundCutouts,
+            grid_source_url: gridUrl,
+            grid_cutout_urls: cutouts,
+            base_front_cutout_url: primaryCutout,
+            turnaround_cutout_urls: {},
           },
         });
         showToast('레퍼런스 생성이 완료되었습니다.');
-        downloadJson(`weav_reference_${nickname}.json`, meta);
+        setGridProgress(null);
         return;
       }
 
@@ -1682,73 +2166,56 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         const styleTarget = (referenceState.style_target || '').trim();
         if (!styleTarget) return showToast('원하는 스타일 키워드를 입력해 주세요.');
 
-        setWorkStatus('배경 제거(전처리) 중...');
-        let refForEdit = sourceImageUrl;
-        try {
-          const cut = await studioBgRemove(sourceImageUrl, { crop_to_bbox: referenceState.crop_to_bbox });
-          refForEdit = cut.image.url;
-        } catch {
-          /* keep original */
-        }
+        setBaseFrontUrl('');
+        setBaseFrontCutoutUrl('');
+        setTurnaroundUrls({});
+        setTurnaroundCutoutUrls({});
+        const refForEdit = sourceImageUrl;
 
-        setWorkStatus('리스타일(정면) 생성 중...');
-        const restylePrompt = buildPromptEn('front');
-        const restyled = await studioImage({
+        setWorkStatus('리스타일 레퍼런스 그리드 생성 중...');
+        setGridProgress(null);
+        const restylePrompt = buildGridPromptEn({
+          mode: 'restyle',
+          referenceHint: 'Use the provided reference image for identity and pose consistency.',
+        });
+        const gridRes = await studioImage({
           prompt: restylePrompt,
           model,
           aspect_ratio: aspectRatio,
           num_images: 1,
           reference_image_url: refForEdit,
+          resolution,
+          output_format: 'png',
         });
-        const restyledUrl = restyled.images?.[0]?.url;
-        if (!restyledUrl) throw new Error('restyled image url missing');
-        setBaseFrontUrl(restyledUrl);
+        const gridUrl = gridRes.images?.[0]?.url;
+        if (!gridUrl) throw new Error('restyled grid url missing');
 
-        setWorkStatus('리스타일 배경 제거 중...');
-        const restyledCut = await studioBgRemove(restyledUrl, { crop_to_bbox: referenceState.crop_to_bbox });
-        setBaseFrontCutoutUrl(restyledCut.image.url);
-        setReferenceImageUrl(restyledCut.image.url);
-
-        let nextTurnaround: Partial<Record<StudioReferenceView, string>> = {};
-        let nextTurnaroundCutouts: Partial<Record<StudioReferenceView, string>> = {};
-        if (wantsTurnaround) {
-          for (const v of views) {
-            if (v === 'front') continue;
-            setWorkStatus(`턴어라운드 생성 중... (${viewKo[v] || v})`);
-            const prompt = buildPromptEn(v);
-            const res = await studioImage({
-              prompt,
-              model,
-              aspect_ratio: aspectRatio,
-              num_images: 1,
-              reference_image_url: restyledUrl,
-            });
-            const outUrl = res.images?.[0]?.url;
-            if (!outUrl) continue;
-            nextTurnaround = { ...nextTurnaround, [v]: outUrl };
-            setTurnaroundUrls(nextTurnaround);
-            try {
-              setWorkStatus(`턴어라운드 배경 제거 중... (${viewKo[v] || v})`);
-              const cut = await studioBgRemove(outUrl, { crop_to_bbox: referenceState.crop_to_bbox });
-              nextTurnaroundCutouts = { ...nextTurnaroundCutouts, [v]: cut.image.url };
-              setTurnaroundCutoutUrls(nextTurnaroundCutouts);
-            } catch {
-              /* ignore */
-            }
-          }
+        setWorkStatus('그리드 9분할 중...');
+        const tiles = await sliceGridImage(gridUrl);
+        const cutouts: string[] = [];
+        for (let i = 0; i < tiles.length; i += 1) {
+          setGridProgress({ current: i + 1, total: tiles.length, label: '타일 업로드' });
+          setWorkStatus(`타일 업로드 중... (${i + 1}/9)`);
+          const tileFile = new File([tiles[i]], `weav_reference_${nickname}_tile_${i + 1}.png`, { type: 'image/png' });
+          const uploaded = await uploadStudioReferenceImage(tileFile);
+          cutouts.push(uploaded.url);
         }
 
-        const meta = setMeta({
+        const primaryCutout = cutouts[1] || cutouts[0] || '';
+        setBaseFrontCutoutUrl(primaryCutout);
+        setReferenceImageUrl(primaryCutout);
+
+        setMeta({
           generated_assets: {
             source_image_url: sourceImageUrl,
-            base_front_url: restyledUrl,
-            base_front_cutout_url: restyledCut.image.url,
-            turnaround_urls: nextTurnaround,
-            turnaround_cutout_urls: nextTurnaroundCutouts,
+            grid_source_url: gridUrl,
+            grid_cutout_urls: cutouts,
+            base_front_cutout_url: primaryCutout,
+            turnaround_cutout_urls: {},
           },
         });
         showToast('리스타일 레퍼런스 생성이 완료되었습니다.');
-        downloadJson(`weav_reference_${nickname}.json`, meta);
+        setGridProgress(null);
       }
     } catch (e) {
       console.error(e);
@@ -1774,11 +2241,12 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const mode = referenceState.mode;
   const showUploadCard = mode !== 'GENERATE_NEW';
   const showExample = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE';
-  const showPresetSelect = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE';
-  const showStyleTarget = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE' || showAdvanced;
-  const showIdentityLocks = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE' || showAdvanced;
+  const showStyleTarget = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE';
+  const showBodyInfo = mode === 'GENERATE_NEW' || (mode === 'RESTYLE_REFERENCE' && showAdvanced);
+  const showPalette = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE' || showAdvanced;
   const showKeepChange = mode === 'RESTYLE_REFERENCE';
   const showStyleAnalysisBox = (mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE' || showAdvanced) && !!analyzedStylePrompt;
+  const hasPreview = gridCutoutUrls.length > 0;
 
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
@@ -1786,6 +2254,7 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         kicker="Step 4 / Reference"
         title="레퍼런스 이미지"
         subtitle="캐릭터/아바타 등 생성에 반영할 레퍼런스 이미지를 업로드합니다."
+        className="max-w-[900px] mx-auto"
       />
 
       <div className="max-w-[900px] mx-auto space-y-6">
@@ -1824,7 +2293,21 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         </div>
 
         <div className="ui-card space-y-4">
-          <span className="ui-label">기본 정보</span>
+          <span className="ui-label">필수 입력</span>
+          {mode === 'GENERATE_NEW' && (
+            <div className="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-slate-700">
+                캐릭터 설계가 비어 있으면 `랜덤 생성`으로 디테일한 기본값을 자동 채울 수 있습니다.
+              </div>
+              <button
+                type="button"
+                onClick={fillRandomReferenceFields}
+                className="ui-btn ui-btn--secondary shrink-0"
+              >
+                랜덤 생성
+              </button>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="ui-label">별명 (필수)</label>
@@ -1838,26 +2321,7 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
                 프로젝트 안에서 캐릭터를 구분하는 이름이에요. (추천: 한글/영문+숫자 조합)
               </div>
             </div>
-            {showPresetSelect ? (
-              <div>
-                <label className="ui-label">프리셋</label>
-                <select
-                  className="ui-input mt-2 w-full"
-                  value={referenceState.preset}
-                  onChange={(e) => setReferenceState((p) => ({ ...p, preset: e.target.value as StudioReferencePreset }))}
-                >
-                  <option value="profile">프로필(정면 1장)</option>
-                  <option value="turnaround_sheet">턴어라운드(정면/옆/뒤/3/4)</option>
-                  <option value="expressions">표정 세트</option>
-                  <option value="3d_modeling">3D 모델링용</option>
-                  <option value="live2d">Live2D용</option>
-                  <option value="all">전체</option>
-                </select>
-                <div className="text-xs text-muted-foreground mt-2">
-                  기본은 턴어라운드가 가장 재사용성이 높아요.
-                </div>
-              </div>
-            ) : (
+            {(mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE') && (
               <div className="flex items-end justify-end">
                 <button
                   type="button"
@@ -1869,6 +2333,61 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
               </div>
             )}
           </div>
+          {showBodyInfo && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="ui-label">나이대 {mode === 'GENERATE_NEW' ? '(필수)' : '(선택)'}</label>
+                <select
+                  className="ui-input mt-2 w-full"
+                  value={referenceState.age_group}
+                  onChange={(e) => setReferenceState((p) => ({ ...p, age_group: e.target.value }))}
+                >
+                  <option value="">선택</option>
+                  <option value="late teens">10대 후반</option>
+                  <option value="early 20s">20대 초반</option>
+                  <option value="mid 20s">20대 중반</option>
+                  <option value="late 20s">20대 후반</option>
+                  <option value="early 30s">30대 초반</option>
+                  <option value="mid 30s">30대 중반</option>
+                  <option value="late 30s">30대 후반</option>
+                  <option value="40s">40대</option>
+                  <option value="50s+">50대 이상</option>
+                </select>
+              </div>
+              <div>
+                <label className="ui-label">성별 표현 {mode === 'GENERATE_NEW' ? '(필수)' : '(선택)'}</label>
+                <select
+                  className="ui-input mt-2 w-full"
+                  value={referenceState.gender}
+                  onChange={(e) => setReferenceState((p) => ({ ...p, gender: e.target.value }))}
+                >
+                  <option value="">선택</option>
+                  <option value="female">여성</option>
+                  <option value="male">남성</option>
+                  <option value="androgynous">중성적</option>
+                </select>
+              </div>
+              <div>
+                <label className="ui-label">키 {mode === 'GENERATE_NEW' ? '(필수)' : '(선택)'}</label>
+                <div className="mt-2 flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={120}
+                    max={220}
+                    className="ui-input w-full"
+                    value={referenceState.height_cm ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const next = raw === '' ? null : Number(raw);
+                      setReferenceState((p) => ({ ...p, height_cm: Number.isNaN(next) ? null : next }));
+                    }}
+                    placeholder="cm"
+                  />
+                  <span className="text-xs text-muted-foreground">cm</span>
+                </div>
+              </div>
+            </div>
+          )}
           {showStyleTarget && (
             <div>
               <label className="ui-label">스타일/분위기 키워드</label>
@@ -1880,6 +2399,37 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
               />
               <div className="text-xs text-muted-foreground mt-2">
                 쉼표(,)로 나누면 좋아요. (예: “깔끔한 2D 애니, 셀 셰이딩, 스튜디오 조명”)
+              </div>
+              <div className="mt-4 space-y-3">
+                <div className="text-xs text-muted-foreground">스타일 빠른 선택 (클릭 시 입력값을 교체합니다)</div>
+                <div className="flex flex-wrap gap-2">
+                  {styleBasePresets.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => applyBaseStylePreset(preset.value)}
+                      className="ui-btn ui-btn--secondary"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-xs text-muted-foreground">스타일 추가 옵션 (클릭해서 토글)</div>
+                <div className="flex flex-wrap gap-2">
+                  {styleModifiers.map((tag) => {
+                    const active = styleTags.map(normalizeStyleTag).includes(normalizeStyleTag(tag));
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => toggleStyleModifier(tag)}
+                        className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${active ? 'border-primary/60 bg-primary/10 text-primary' : 'border-border/70 text-slate-600 hover:border-border/90'}`}
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
@@ -2023,37 +2573,11 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
           </div>
         )}
 
-        {showIdentityLocks && (
+        {showPalette && (
           <div className="ui-card space-y-4">
-            <span className="ui-label">아이덴티티 잠금 (선택)</span>
+            <span className="ui-label">팔레트 (선택)</span>
             <div className="text-xs text-muted-foreground">
-              “이 캐릭터는 이런 특징을 반드시 유지해 주세요”를 짧게 적으면, 뷰가 달라져도 동일 인물로 유지하기가 쉬워요.
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <input
-                className="ui-input"
-                value={referenceState.identity_locks.hair}
-                onChange={(e) => setReferenceState((p) => ({ ...p, identity_locks: { ...p.identity_locks, hair: e.target.value } }))}
-                placeholder="헤어 예시: 검은 단발 + 앞머리"
-              />
-              <input
-                className="ui-input"
-                value={referenceState.identity_locks.eyes}
-                onChange={(e) => setReferenceState((p) => ({ ...p, identity_locks: { ...p.identity_locks, eyes: e.target.value } }))}
-                placeholder="눈/눈동자 예시: 짙은 갈색 눈"
-              />
-              <input
-                className="ui-input"
-                value={referenceState.identity_locks.outfit_silhouette}
-                onChange={(e) => setReferenceState((p) => ({ ...p, identity_locks: { ...p.identity_locks, outfit_silhouette: e.target.value } }))}
-                placeholder="의상 실루엣 예시: 오프화이트 후드 + 검정 슬랙스 + 흰 스니커즈"
-              />
-              <input
-                className="ui-input"
-                value={referenceState.identity_locks.distinctive_marks}
-                onChange={(e) => setReferenceState((p) => ({ ...p, identity_locks: { ...p.identity_locks, distinctive_marks: e.target.value } }))}
-                placeholder="구분 포인트 예시: 동그란 안경 + 왼쪽 눈 밑 점"
-              />
+              레퍼런스의 주요 색감을 지정하면 캐릭터 톤이 더 안정적으로 유지됩니다.
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="flex items-center gap-3">
@@ -2146,6 +2670,122 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         >
           비주얼로 이동 <ChevronRight size={18} />
         </button>
+
+        {hasPreview && (
+          <div className="ui-card space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="ui-label">레퍼런스 타일 수정</span>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>필요한 타일만 선택해서 수정하세요.</span>
+                <button
+                  type="button"
+                  onClick={downloadReferenceZip}
+                  disabled={isZipDownloading}
+                  className="ui-btn ui-btn--ghost"
+                >
+                  {isZipDownloading ? '압축 중...' : 'ZIP 다운로드'}
+                </button>
+              </div>
+            </div>
+            {gridCutoutUrls.length > 0 ? (
+              <div className="space-y-4">
+                <div className="rounded-2xl overflow-hidden border border-border/60 bg-secondary/20">
+                  <div className="grid grid-cols-3 gap-0">
+                    {gridCutoutUrls.map((url, idx) => {
+                      const spec = tileSpecs[idx];
+                      const selected = selectedTileIndex === idx;
+                      return (
+                        <button
+                          key={url || idx}
+                          type="button"
+                          onClick={() => {
+                            setSelectedTileIndex(idx);
+                            setTileEditPrompt('');
+                            setTileOverrideAngle('');
+                          }}
+                          className={`relative aspect-[9/16] w-full overflow-hidden border border-border/40 bg-slate-100 ${selected ? 'ring-2 ring-primary/60 z-10' : ''} cursor-pointer`}
+                        >
+                          <img src={url} alt={`reference tile ${idx + 1}`} className="h-full w-full object-cover" />
+                          <span className="absolute left-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-xs font-semibold text-white">
+                            {spec?.label ?? idx + 1}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                {selectedTileIndex != null && tileSpecs[selectedTileIndex] && (
+                  <div className="ui-card--muted space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold">
+                        선택한 타일: {tileSpecs[selectedTileIndex].label} ({tileSpecs[selectedTileIndex].angle}, {tileSpecs[selectedTileIndex].view})
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedTileIndex(null);
+                          setTileEditPrompt('');
+                        }}
+                        className="ui-btn ui-btn--ghost"
+                      >
+                        선택 해제
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="ui-label">방향 재지정 (선택)</label>
+                        <select
+                          className="ui-input mt-2 w-full"
+                          value={tileOverrideAngle}
+                          onChange={(e) => setTileOverrideAngle(e.target.value)}
+                        >
+                          <option value="">기본 각도 유지</option>
+                          {tileAngleOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="text-xs text-muted-foreground flex items-end">
+                        각도를 재지정하면 해당 방향으로 다시 생성합니다.
+                      </div>
+                    </div>
+                    <textarea
+                      className="ui-input min-h-[96px]"
+                      value={tileEditPrompt}
+                      onChange={(e) => setTileEditPrompt(e.target.value)}
+                      placeholder="예: 5번은 반대로 고개를 돌려주세요. 7번은 오른쪽을 바라보게 해주세요."
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={regenerateTile}
+                        disabled={isTileRegenerating}
+                        className="ui-btn ui-btn--secondary"
+                      >
+                        {isTileRegenerating ? '재생성 중...' : '선택 타일 재생성'}
+                      </button>
+                      <span className="text-xs text-muted-foreground">이 타일만 새로 생성됩니다.</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+            {isWorking && gridProgress && (
+              <div className="ui-card--muted text-sm text-slate-600">
+                <div className="flex items-center justify-between">
+                  <span>{gridProgress.label}</span>
+                  <span>{gridProgress.current} / {gridProgress.total}</span>
+                </div>
+                <div className="mt-2 h-2 rounded-full bg-secondary/60 overflow-hidden">
+                  <div
+                    className="h-full bg-primary/60"
+                    style={{ width: `${Math.round((gridProgress.current / gridProgress.total) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
