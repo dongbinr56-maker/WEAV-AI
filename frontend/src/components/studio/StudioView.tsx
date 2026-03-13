@@ -3,19 +3,20 @@ import React, { useState, useEffect, useCallback, useRef, createContext, useCont
 import JSZip from 'jszip';
 import {
   X, History, Ghost, BookOpen, TrendingUp, Globe, MonitorPlay, ChevronRight, Flame, Loader2,
-  CheckCircle2, PlayCircle, Layers, Trash2, Link as LinkIcon, Sparkles, Target, Terminal,
+  CheckCircle2, PlayCircle, Layers, Trash2, Link as LinkIcon, Sparkles, Target,
   Download,
   Image as ImageIcon, Video, Wand2, Camera, Plus, Mic2, FileText, AlignLeft, Settings2,
 	  Sliders, Music4, Activity, Smartphone, Monitor, PenTool, RefreshCcw, Utensils,
 	  MessageCircle, Zap, Hash, Compass, Sword, Microscope, Palette, Map, Film, Heart, Gift,
-	  Leaf, Smile, BarChart3, Box, CheckSquare, ImagePlus, ScanLine
+	  Leaf, Smile, BarChart3, Box, ImagePlus, ScanLine
 	} from 'lucide-react';
 	import {
 	  StudioGlobalContextType,
 	  StudioScene,
 	  StudioScriptSegment,
-	  StudioAnalysisResult,
-	  StudioScriptPlanningData,
+	StudioAnalysisResult,
+	StudioScriptPlanningData,
+	type StudioTopicSuggestion,
 	  type StudioReferenceMode,
 	  type StudioReferenceState,
 	  type StudioReferenceView,
@@ -45,6 +46,24 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
   }
 }
 
+function normalizeStoredTopicSuggestions(raw: unknown): StudioTopicSuggestion[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (typeof item === 'string') {
+        return { title: item, reason: '' };
+      }
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const obj = item as Record<string, unknown>;
+        const title = typeof obj.title === 'string' ? obj.title.trim() : '';
+        const reason = typeof obj.reason === 'string' ? obj.reason.trim() : '';
+        if (title) return { title, reason };
+      }
+      return null;
+    })
+    .filter((item): item is StudioTopicSuggestion => Boolean(item));
+}
+
 	const GlobalProvider: React.FC<{ children: React.ReactNode; sessionId?: number }> = ({ children, sessionId }) => {
 	  const storageKey = sessionId != null ? `${STORAGE_KEY_PREFIX}_${sessionId}` : STORAGE_KEY_PREFIX;
 	  const stored = useMemo(() => loadStoredStudio(storageKey), [storageKey]);
@@ -63,7 +82,7 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
 	  const [selectedBenchmarkPatterns, setSelectedBenchmarkPatterns] = useState<string[]>(() => Array.isArray(stored?.selectedBenchmarkPatterns) ? stored.selectedBenchmarkPatterns as string[] : []);
 	  const [isLoading, setIsLoading] = useState(false);
 	  const [loadingMessage, setLoadingMessage] = useState<string | null>(null);
-	  const [isDevMode, setIsDevMode] = useState(false);
+	  const isDevMode = true;
   const [videoFormat, setVideoFormat] = useState(() => (typeof stored?.videoFormat === 'string') ? stored.videoFormat : '9:16');
   const [inputMode, setInputMode] = useState<'tag' | 'description'>(() => (stored?.inputMode === 'tag' || stored?.inputMode === 'description') ? stored.inputMode : 'tag');
   const [descriptionInput, setDescriptionInput] = useState(() => (typeof stored?.descriptionInput === 'string') ? stored.descriptionInput : '');
@@ -155,7 +174,7 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
 	  const [scenes, setScenes] = useState<StudioScene[]>(() => Array.isArray(stored?.scenes) && stored.scenes.length > 0 ? stored.scenes as StudioScene[] : []);
 	  const [sceneDurations, setSceneDurations] = useState<number[]>(() => Array.isArray(stored?.sceneDurations) ? (stored.sceneDurations as number[]) : []);
 	  const [scriptSegments, setScriptSegments] = useState<StudioScriptSegment[]>([]);
-	  const [generatedTopics, setGeneratedTopics] = useState<string[]>(() => Array.isArray(stored?.generatedTopics) ? stored.generatedTopics : []);
+	  const [generatedTopics, setGeneratedTopics] = useState<StudioTopicSuggestion[]>(() => normalizeStoredTopicSuggestions(stored?.generatedTopics));
 	  const [selectedTopic, setSelectedTopic] = useState(() => (typeof stored?.selectedTopic === 'string') ? stored.selectedTopic : '');
 	  const [finalTopic, setFinalTopic] = useState(() => (typeof stored?.finalTopic === 'string') ? stored.finalTopic : '');
 	  const [referenceScript, setReferenceScript] = useState('');
@@ -213,7 +232,7 @@ function loadStoredStudio(storageKey: string): Record<string, unknown> | null {
     selectedBenchmarkPatterns, setSelectedBenchmarkPatterns,
     isLoading, setIsLoading,
     loadingMessage, setLoadingMessage,
-    isDevMode, setIsDevMode,
+    isDevMode,
     videoFormat, setVideoFormat,
     analysisResult, setAnalysisResult,
 	    inputMode, setInputMode,
@@ -291,6 +310,7 @@ const AutoResizeTextarea: React.FC<{
 const StandardTagInput: React.FC = () => {
   const { activeTags, setActiveTags } = useGlobal();
   const [inputValue, setInputValue] = useState('');
+  const isComposingRef = useRef(false);
 
   const addTag = useCallback((val: string) => {
     const tags = val.split(/[,\s]+/).map(t => t.trim().replace(/#/g, '')).filter(t => t.length > 0);
@@ -306,7 +326,10 @@ const StandardTagInput: React.FC = () => {
     setInputValue('');
   }, [setActiveTags]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (isComposingRef.current || e.nativeEvent.isComposing) {
+      return;
+    }
     if (e.key === 'Enter' || e.key === ',' || e.key === ' ') {
       e.preventDefault();
       addTag(inputValue);
@@ -330,6 +353,13 @@ const StandardTagInput: React.FC = () => {
           type="text"
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
+          onCompositionStart={() => {
+            isComposingRef.current = true;
+          }}
+          onCompositionEnd={(e) => {
+            isComposingRef.current = false;
+            setInputValue(e.currentTarget.value);
+          }}
           onKeyDown={handleKeyDown}
           placeholder={activeTags.length === 0 ? "영상 키워드 입력 (엔터/콤마)" : "키워드 추가..."}
           className="planner-tagbox__input"
@@ -373,7 +403,7 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
     activeTags, setActiveTags, analysisResult, setAnalysisResult, inputMode, setInputMode, descriptionInput, setDescriptionInput,
     videoFormat, setVideoFormat, urlInput, setUrlInput, setGeneratedTopics, urlAnalysisData, setUrlAnalysisData,
     selectedBenchmarkPatterns, setSelectedBenchmarkPatterns,
-    isFileLoaded, setCurrentStep
+    isFileLoaded, setIsFileLoaded, setCurrentStep
   } = useGlobal();
 
   const [isTopicGenerating, setIsTopicGenerating] = useState(false);
@@ -533,6 +563,20 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
     return '알 수 없음';
   };
 
+  const handleResetIdea = () => {
+    setActiveTags([]);
+    setDescriptionInput('');
+    setGeneratedTopics([]);
+    setIsFileLoaded(false);
+  };
+
+  const handleResetBenchmark = () => {
+    setUrlInput('');
+    setUrlAnalysisData(null);
+    setSelectedBenchmarkPatterns([]);
+    setAnalysisResult((p) => ({ ...p, isUrlAnalyzing: false, error: null }));
+  };
+
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
       <SectionHeader
@@ -604,9 +648,14 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
               <div>
                 <div className="wf-panel__title">아이디어</div>
               </div>
-              <div className="planner-tabs">
-                <button onClick={() => setInputMode('tag')} className={`planner-tab ${inputMode === 'tag' ? 'is-active' : ''}`}>키워드</button>
-                <button onClick={() => setInputMode('description')} className={`planner-tab ${inputMode === 'description' ? 'is-active' : ''}`}>설명</button>
+              <div className="flex items-center gap-3">
+                <button onClick={handleResetIdea} className="ui-btn ui-btn--ghost text-xs">
+                  <RefreshCcw size={12} /> 초기화
+                </button>
+                <div className="planner-tabs">
+                  <button onClick={() => setInputMode('tag')} className={`planner-tab ${inputMode === 'tag' ? 'is-active' : ''}`}>키워드</button>
+                  <button onClick={() => setInputMode('description')} className={`planner-tab ${inputMode === 'description' ? 'is-active' : ''}`}>설명</button>
+                </div>
               </div>
             </div>
             <div className="mb-3">
@@ -631,6 +680,9 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
               <div>
                 <div className="wf-panel__title">벤치마킹</div>
               </div>
+              <button onClick={handleResetBenchmark} className="ui-btn ui-btn--ghost text-xs">
+                <RefreshCcw size={12} /> 초기화
+              </button>
             </div>
             <div className="wf-inline">
               <input type="text" value={urlInput} onChange={e => setUrlInput(e.target.value)} placeholder="참고할 유튜브 주소를 입력하세요..." className="ui-input" />
@@ -801,15 +853,22 @@ const TopicGenerationStep = ({ showToast }: { showToast: (msg: string) => void }
       <div className="ui-card ui-card--flush overflow-hidden">
         {generatedTopics.map((topic, idx) => (
           <button
-            key={idx}
-            onClick={() => setSelectedTopic(topic)}
-            className={`topic-row w-full flex items-center justify-between px-6 py-5 text-left transition-colors ${selectedTopic === topic ? 'is-selected' : ''}`}
+            key={`${topic.title}-${idx}`}
+            onClick={() => setSelectedTopic(topic.title)}
+            className={`topic-row w-full flex items-center justify-between px-6 py-5 text-left transition-colors ${selectedTopic === topic.title ? 'is-selected' : ''}`}
           >
-            <div className="flex items-center gap-4">
-              <span className={`ui-step__num ${selectedTopic === topic ? 'is-selected' : ''}`}>{(idx + 1).toString().padStart(2, '0')}</span>
-              <span className="text-base font-semibold">{topic}</span>
+            <div className="flex items-start gap-4">
+              <span className={`ui-step__num mt-0.5 ${selectedTopic === topic.title ? 'is-selected' : ''}`}>{(idx + 1).toString().padStart(2, '0')}</span>
+              <div className="space-y-2">
+                <div className="text-base font-semibold">{topic.title}</div>
+                {topic.reason && (
+                  <p className="text-sm text-slate-500 leading-relaxed">
+                    추천 이유: {topic.reason}
+                  </p>
+                )}
+              </div>
             </div>
-            {selectedTopic === topic && <CheckCircle2 size={20} />}
+            {selectedTopic === topic.title && <CheckCircle2 size={20} />}
           </button>
         ))}
       </div>
@@ -839,7 +898,7 @@ const TopicGenerationStep = ({ showToast }: { showToast: (msg: string) => void }
 // --- [Step 3: 대본 아키텍처] ---
 const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const { 
-    selectedTopic, finalTopic, scriptStyle, setScriptStyle, scriptLength,
+    selectedTopic, finalTopic, scriptStyle, setScriptStyle, customScriptStyleText, setCustomScriptStyleText, scriptLength,
     planningData, setPlanningData, setCurrentStep,
     masterPlan, setMasterPlan,
     masterScript, setMasterScript,
@@ -866,8 +925,13 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
     () => archetypes.find((a) => a.id === scriptStyle) || null,
     [scriptStyle]
   );
+  const trimmedCustomStyleText = customScriptStyleText.trim();
   const styleLabelForPrompt = selectedArchetype
-    ? `${selectedArchetype.name} — ${selectedArchetype.desc}`
+    ? (
+        scriptStyle === 'custom' && trimmedCustomStyleText
+          ? `${selectedArchetype.name} — ${trimmedCustomStyleText}`
+          : `${selectedArchetype.name} — ${selectedArchetype.desc}`
+      )
     : scriptStyle;
 
   const topicForPlanning = (finalTopic || selectedTopic || '').trim();
@@ -914,11 +978,16 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
       ].join('\n'),
       'custom': [
         '- Follow the user-provided custom style exactly.',
-        '- If custom style details are missing, ask implicitly by making assumptions explicit in the plan.',
+        trimmedCustomStyleText
+          ? `- Custom style instruction from user:\n${trimmedCustomStyleText}`
+          : '- Custom style details are currently missing. Do not guess a custom style; wait for explicit user direction.',
+        '- Treat the custom style instruction as the top-priority tone/format rule unless it conflicts with factual safety.',
       ].join('\n'),
     };
     return rules[scriptStyle] || '';
-  }, [scriptStyle]);
+  }, [scriptStyle, trimmedCustomStyleText]);
+
+  const isCustomStyleReady = scriptStyle !== 'custom' || trimmedCustomStyleText.length > 0;
 
   const steps = [
     { id: 1, key: 'contentType', name: '1) 콘텐츠 타입' },
@@ -936,6 +1005,8 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
     { id: '5m', label: '5분 (Deep)', icon: <Film size={14}/> },
     { id: 'custom', label: '직접 입력', icon: <PenTool size={14}/> }
   ];
+  const presetDurationIds = durations.filter((d) => d.id !== 'custom').map((d) => d.id);
+  const isCustomDurationSelected = !presetDurationIds.includes(planningData.targetDuration || '');
 
   const stepGuides: Record<string, string> = {
     contentType: "이 영상의 정체성을 정의합니다. 어떤 장르이며, 누구에게 어떤 가치를 주고자 하는지 명확히 하세요.",
@@ -1035,58 +1106,6 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
     }
   };
 
-  const runMasterPlanOnlyAI = async () => {
-    if (!topicForPlanning) return showToast('주제가 확정되지 않았습니다. 2단계에서 주제를 확정해 주세요.');
-    setLoadingStepKey('masterPlan');
-    try {
-      const res = await generateMasterPlan({
-        topic: topicForPlanning,
-        style: styleLabelForPrompt,
-        styleRules: styleRulesForPrompt,
-        length: scriptLength,
-        benchmarkSummary: benchmarkSummaryForPrompt,
-        benchmarkPatterns: benchmarkPatternsForPrompt,
-        existingMasterPlan: masterPlan,
-        planningData
-      });
-      const text = (res.result || '').trim();
-      if (text) {
-        setMasterPlan(text);
-        showToast('대단원 기획안이 생성되었습니다.');
-      } else {
-        showToast('대단원 기획안 생성에 실패했습니다.');
-      }
-    } catch (e) {
-      showToast('대단원 기획안 생성에 실패했습니다.');
-      console.error(e);
-    } finally {
-      setLoadingStepKey(null);
-    }
-  };
-
-  const runSplitFromMasterPlan = async () => {
-    if (!topicForPlanning) return showToast('주제가 확정되지 않았습니다. 2단계에서 주제를 확정해 주세요.');
-    if (!masterPlan.trim()) return showToast('대단원 기획안이 비어 있습니다. 먼저 생성하거나 입력해 주세요.');
-    setLoadingStepKey('masterPlan:split');
-    try {
-      const split = await splitMasterPlanToSteps({
-        topic: topicForPlanning,
-        style: styleLabelForPrompt,
-        styleRules: styleRulesForPrompt,
-        masterPlanText: masterPlan,
-        benchmarkSummary: benchmarkSummaryForPrompt,
-        benchmarkPatterns: benchmarkPatternsForPrompt
-      });
-      setPlanningData((p) => ({ ...p, ...split }));
-      showToast('대단원 기획안을 1~6 파트로 분할했습니다.');
-    } catch (e) {
-      showToast('분할에 실패했습니다.');
-      console.error(e);
-    } finally {
-      setLoadingStepKey(null);
-    }
-  };
-
   const handleSynthesizeScript = async () => {
     setSynthesizeProgress('통합 시나리오 생성 중...');
     try {
@@ -1110,6 +1129,12 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
   const handleGoToVisualStep = () => {
     setIsPreviewOpen(false);
     setCurrentStep(4);
+  };
+
+  const handleOpenScriptReview = async () => {
+    setReviewMode('script');
+    setIsPreviewOpen(true);
+    await handleSynthesizeScript();
   };
 
   return (
@@ -1167,11 +1192,8 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
                 {synthesizeProgress ? <><Loader2 size={16} className="animate-spin" /> {synthesizeProgress}</> : <>통합 시나리오 생성하기 <Sparkles size={16} /></>}
               </button>
             ) : (
-              <div className="flex flex-col sm:flex-row gap-3">
-                <button onClick={() => setReviewMode('architecture')} className="ui-btn ui-btn--secondary w-full sm:w-auto">
-                  설계도 다시 수정
-                </button>
-                <button onClick={handleGoToVisualStep} className="ui-btn ui-btn--primary w-full sm:flex-1">
+              <div className="flex flex-col gap-3">
+                <button onClick={handleGoToVisualStep} className="ui-btn ui-btn--primary w-full">
                   이미지 및 대본 생성 단계로 <ChevronRight size={16} />
                 </button>
               </div>
@@ -1205,64 +1227,75 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
                 </button>
               ))}
             </div>
+            {scriptStyle === 'custom' && (
+              <div className="ui-card--muted mt-4 space-y-3 p-4 rounded-2xl">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-foreground">사용자 지정 스타일 입력</div>
+                  <p className="text-sm text-slate-600">
+                    원하는 문체, 톤, 전개 방식, 참고 채널 느낌, 금지 표현 등을 직접 적어주세요.
+                  </p>
+                </div>
+                <AutoResizeTextarea
+                  value={customScriptStyleText}
+                  onChange={setCustomScriptStyleText}
+                  placeholder="예: 속보 톤으로 짧고 날카롭게, 첫 문장은 충격 포인트부터 시작, 문장은 짧게 끊고 확인된 사실과 파장 중심으로 전개, 과한 감성 표현 금지"
+                  className="min-h-[120px]"
+                />
+                <p className="text-xs text-slate-500">
+                  입력한 내용이 Step 3 전체 기획 프롬프트에 직접 반영됩니다.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="ui-card space-y-3">
             <span className="ui-label">목표 길이</span>
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {durations.map(d => (
                 <button
                   key={d.id}
-                  onClick={() => setPlanningData(p => ({ ...p, targetDuration: d.id === 'custom' ? '' : d.id }))}
-                  className={`duration-pill ui-btn ${planningData.targetDuration === d.id || (d.id === 'custom' && !durations.some(x => x.id === planningData.targetDuration)) ? 'ui-btn--primary is-selected' : 'ui-btn--secondary'}`}
+                  type="button"
+                  onClick={() => setPlanningData(p => ({ ...p, targetDuration: d.id === 'custom' ? (isCustomDurationSelected ? p.targetDuration : '') : d.id }))}
+                  className={`duration-pill ui-btn w-full justify-center min-h-[52px] ${d.id === 'custom' ? 'col-span-2' : ''} ${planningData.targetDuration === d.id || (d.id === 'custom' && isCustomDurationSelected) ? 'ui-btn--primary is-selected' : 'ui-btn--secondary'}`}
                 >
                   {d.icon} {d.label}
                 </button>
               ))}
             </div>
+            {isCustomDurationSelected && (
+              <div className="space-y-2 pt-1">
+                <input
+                  type="text"
+                  value={planningData.targetDuration}
+                  onChange={(e) => setPlanningData(p => ({ ...p, targetDuration: e.target.value }))}
+                  placeholder="예: 90초, 2분, 2분 30초, 2m30s"
+                  className="ui-input w-full"
+                />
+                <p className="text-xs text-slate-500">
+                  원하는 영상 길이를 직접 입력하세요. 분/초 모두 입력 가능합니다.
+                </p>
+              </div>
+            )}
           </div>
 	        </div>
 	
 	        <div className="col-span-12 lg:col-span-8 space-y-4">
 	          <div className="ui-card space-y-4">
-	            <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
-	              <div className="min-w-0">
+	            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+	              <div className="min-w-0 flex-1">
 	                <span className="ui-label">대단원 기획안 (1~6 통합)</span>
 	                <div className="text-sm text-slate-600 mt-1">
-	                  먼저 1~6 전체가 포함된 큰 기획안을 만든 뒤, 1~6 파트로 분할해 일관성을 유지합니다.
+	                  생성+분할을 한 번에 실행해 1~6 전체 흐름을 일관되게 맞춥니다.
 	                  {topicForPlanning ? ` (주제: ${topicForPlanning})` : ''}
 	                </div>
 	              </div>
-	              <div className="flex flex-wrap gap-2">
-	                <button
-	                  onClick={runMasterPlanOnlyAI}
-	                  disabled={!!loadingStepKey || isGeneratingAll}
-	                  className="ui-btn ui-btn--secondary"
-	                >
-	                  {loadingStepKey === 'masterPlan' ? <><Loader2 size={16} className="animate-spin" /> 대단원 생성 중...</> : <><Sparkles size={16} /> 대단원 생성</>}
-	                </button>
-	                <button
-	                  onClick={runSplitFromMasterPlan}
-	                  disabled={!!loadingStepKey || isGeneratingAll || !masterPlan.trim()}
-	                  className="ui-btn ui-btn--ghost"
-	                >
-	                  {loadingStepKey === 'masterPlan:split' ? <><Loader2 size={16} className="animate-spin" /> 분할 중...</> : '1~6 분할'}
-	                </button>
+	              <div className="flex items-center gap-2 sm:flex-nowrap shrink-0">
 	                <button
 	                  onClick={runAllStepsAI}
-	                  disabled={!!loadingStepKey || isGeneratingAll}
+	                  disabled={!!loadingStepKey || isGeneratingAll || !isCustomStyleReady}
 	                  className="ui-btn ui-btn--primary"
 	                >
 	                  {isGeneratingAll ? <><Loader2 size={16} className="animate-spin" /> 생성+분할 중...</> : <><Zap size={16} /> 생성+분할</>}
-	                </button>
-	                <button
-	                  onClick={() => {
-	                    setReviewMode('architecture');
-	                    setIsPreviewOpen(true);
-	                  }}
-	                  className="ui-btn ui-btn--secondary"
-	                >
-	                  구성 점검 <CheckSquare size={16} />
 	                </button>
 	              </div>
 	            </div>
@@ -1338,6 +1371,33 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
               />
             </div>
           ))}
+
+          <div className="pt-4">
+            {!isCustomStyleReady && (
+              <div className="mb-3 text-sm text-amber-300">
+                사용자 지정 스타일을 선택한 경우, 원하는 스타일 설명을 먼저 입력해야 기획 생성이 가능합니다.
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setCurrentStep(2)}
+                className="ui-btn ui-btn--secondary w-full justify-center"
+              >
+                <ChevronRight size={16} className="rotate-180" /> 이전 2 주제 돌아가기
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenScriptReview}
+                disabled={!!synthesizeProgress}
+                className="ui-btn ui-btn--primary w-full justify-center"
+              >
+                {synthesizeProgress
+                  ? <><Loader2 size={16} className="animate-spin" /> {synthesizeProgress}</>
+                  : <>통합 시나리오 생성하기 <ChevronRight size={16} /></>}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1346,6 +1406,7 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
 
 // --- [Step 4: 레퍼런스] ---
 const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
+  const TURNAROUND_GUIDE_TEMPLATE_PATH = '/studio/turnaround-guide.png';
   const {
     setReferenceImage, referenceImageUrl, setReferenceImageUrl,
     analyzedStylePrompt, setAnalyzedStylePrompt, analyzedStylePromptKo, setAnalyzedStylePromptKo,
@@ -1502,37 +1563,37 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   }, [referenceState.metadata]);
 
   const tileSpecs = useMemo(() => ([
-    { index: 0, label: '1', shot: 'upper-body', angle: '0°', view: 'front' },
-    { index: 1, label: '2', shot: 'full-body', angle: '0°', view: 'front' },
-    { index: 2, label: '3', shot: 'full-body', angle: '+45°', view: 'right 45°' },
-    { index: 3, label: '4', shot: 'full-body', angle: '+90°', view: 'right profile' },
-    { index: 4, label: '5', shot: 'full-body', angle: '+135°', view: 'right back 3/4' },
-    { index: 5, label: '6', shot: 'full-body', angle: '+180°', view: 'back' },
-    { index: 6, label: '7', shot: 'full-body', angle: '-45°', view: 'left 45°' },
-    { index: 7, label: '8', shot: 'full-body', angle: '-90°', view: 'left profile' },
-    { index: 8, label: '9', shot: 'full-body', angle: '-135°', view: 'left back 3/4' },
+    { index: 0, label: '1', shot: 'upper-body', angle: '6시', view: 'front' },
+    { index: 1, label: '2', shot: 'full-body', angle: '6시', view: 'front' },
+    { index: 2, label: '3', shot: 'full-body', angle: '7시 30분', view: 'three-quarter left' },
+    { index: 3, label: '4', shot: 'full-body', angle: '9시', view: 'left profile' },
+    { index: 4, label: '5', shot: 'full-body', angle: '10시 30분', view: 'rear three-quarter left' },
+    { index: 5, label: '6', shot: 'full-body', angle: '12시', view: 'back' },
+    { index: 6, label: '7', shot: 'full-body', angle: '1시 30분', view: 'rear three-quarter right' },
+    { index: 7, label: '8', shot: 'full-body', angle: '3시', view: 'right profile' },
+    { index: 8, label: '9', shot: 'full-body', angle: '4시 30분', view: 'three-quarter right' },
   ]), []);
 
   const tileAngleOptions = useMemo(() => ([
-    { value: '0°', label: '0° 정면' },
-    { value: '+45°', label: '+45° 우전면' },
-    { value: '+90°', label: '+90° 우측면' },
-    { value: '+135°', label: '+135° 우후면' },
-    { value: '180°', label: '180° 후면' },
-    { value: '-45°', label: '-45° 좌전면' },
-    { value: '-90°', label: '-90° 좌측면' },
-    { value: '-135°', label: '-135° 좌후면' },
+    { value: '6시', label: '6시 정면' },
+    { value: '7시 30분', label: '7시 30분 좌전면' },
+    { value: '9시', label: '9시 좌측면' },
+    { value: '10시 30분', label: '10시 30분 좌후면' },
+    { value: '12시', label: '12시 후면' },
+    { value: '1시 30분', label: '1시 30분 우후면' },
+    { value: '3시', label: '3시 우측면' },
+    { value: '4시 30분', label: '4시 30분 우전면' },
   ]), []);
 
   const tileAngleViewMap = useMemo(() => ({
-    '0°': 'front',
-    '+45°': 'right 45°',
-    '+90°': 'right profile',
-    '+135°': 'right back 3/4',
-    '180°': 'back',
-    '-45°': 'left 45°',
-    '-90°': 'left profile',
-    '-135°': 'left back 3/4',
+    '6시': 'front',
+    '7시 30분': 'three-quarter left',
+    '9시': 'left profile',
+    '10시 30분': 'rear three-quarter left',
+    '12시': 'back',
+    '1시 30분': 'rear three-quarter right',
+    '3시': 'right profile',
+    '4시 30분': 'three-quarter right',
   } as Record<string, string>), []);
 
   useEffect(() => {
@@ -1725,18 +1786,20 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
     const height = referenceState.height_cm;
     const base = [
       'You are a senior avatar/character reference artist and production designer.',
+      'Generate exactly ONE turnaround-sheet tile, not a multi-panel grid.',
+      'Use the provided reference image as the canonical identity source.',
+      'Preserve the reference identity EXACTLY: same face, hairstyle, hair volume, outfit, materials, accessories, proportions, silhouette, lighting family, and render style.',
       'Single character only. No text, no labels, no borders, no grid.',
       'Solid light gray background, seamless (no horizon line, no gradient).',
       'Even studio lighting, soft shadows only.',
-      'Consistent scale and proportions across panels of the same sheet.',
-      'Preserve the original image EXACTLY: same outfit, materials, accessories, hair, face, makeup, body proportions, lighting, color grading, background, and render style.',
-      'Keep the EXACT same pose, stance, and expression unless the user request says otherwise.',
-      'Rotate the entire body to the requested direction, not just the head.',
-      'The character must be standing upright (no sitting, kneeling, crouching, or leaning).',
+      'The character must be standing upright (no sitting, kneeling, crouching, leaning, or walking).',
       'Hands must be empty; do not hold any objects or phones.',
-      'Outfit must remain identical to the reference image (same clothing, colors, materials, accessories). Do NOT change wardrobe.',
+      'Outfit must remain identical to the reference image. Do NOT change wardrobe.',
+      'The entire body must rotate to the requested clock-face direction as one unit. Head, eyes, nose, shoulders, chest, hips, knees, and feet must agree with the same facing direction.',
+      'Do not keep the torso front-facing while only turning the head.',
+      'Do not keep the face aimed at the camera unless the requested facing direction is 6 o’clock front.',
       `Shot type: ${spec.shot === 'upper-body' ? 'upper-body (about 60% frame height)' : 'full-body head-to-toe, fully visible inside the frame'}.`,
-      spec.angle ? `Yaw angle: ${spec.angle}${spec.view ? ` (${spec.view})` : ''}.` : null,
+      spec.angle ? `Target facing direction on the clock face: ${spec.angle}${spec.view ? ` (${spec.view})` : ''}.` : null,
       ageGroup ? `apparent age: ${ageGroup}` : null,
       gender ? `gender presentation: ${gender}` : null,
       height ? `approx height: ${height} cm` : null,
@@ -1768,6 +1831,12 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
       'background change',
       'different materials',
       'different accessories',
+      'duplicate angle from another turnaround tile',
+      'head-only rotation',
+      'eyes looking at camera when body is profile or back',
+      'front torso with profile head',
+      'profile torso with front-facing head',
+      'back torso with front-facing head',
       'phone',
       'smartphone',
       'holding objects',
@@ -1779,6 +1848,12 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
     if (!url) return url;
     return url.includes('?') ? `${url}&v=${Date.now()}` : `${url}?v=${Date.now()}`;
   }, []);
+
+  const loadTurnaroundGuideTemplateBlob = useCallback(async () => {
+    const response = await fetch(TURNAROUND_GUIDE_TEMPLATE_PATH, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`turnaround guide template fetch failed: ${response.status}`);
+    return await response.blob();
+  }, [TURNAROUND_GUIDE_TEMPLATE_PATH]);
 
   const regenerateTile = useCallback(async () => {
     if (selectedTileIndex == null) return;
@@ -1810,10 +1885,10 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
       const prompt = buildTilePromptEn({ spec: finalSpec, styleTargetEn, userNote: mergedNote || undefined });
       const res = await studioImage({
         prompt,
-        model: 'fal-ai/gemini-3-pro-image-preview',
+        model: 'fal-ai/nano-banana-2/edit',
         aspect_ratio: '9:16',
         num_images: 1,
-        ...(referenceForTile ? { reference_image_url: referenceForTile } : {}),
+        ...(referenceForTile ? { reference_image_url: referenceForTile, image_urls: [referenceForTile] } : {}),
         resolution: '4K',
         output_format: 'png',
       });
@@ -1924,35 +1999,13 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
       const styleTargetEn =
         styleTargetRaw && containsKorean(styleTargetRaw) ? (await translateToEnglish(styleTargetRaw)) || styleTargetRaw : styleTargetRaw;
 
-	      const model = 'fal-ai/gemini-3-pro-image-preview';
+	      const model = 'fal-ai/nano-banana-2/edit';
 	      const aspectRatio = '9:16';
 	      const resolution = '4K' as const;
-
-	      const mustKeepEnLabel: Record<(typeof mustKeepOptions)[number], string> = {
-	        face: 'face',
-	        hair: 'hair',
-	        outfit: 'outfit',
-	        colors: 'colors',
-	        body_type: 'body type',
-	        accessories: 'accessories',
-	      };
-	      const mayChangeEnLabel: Record<(typeof mayChangeOptions)[number], string> = {
-	        outfit: 'outfit',
-	        colors: 'colors',
-	        hairstyle: 'hairstyle',
-	        accessories: 'accessories',
-	        material: 'materials/textures',
-	        mood: 'mood/atmosphere',
-	      };
 
 	      const buildGridPromptEn = (opts?: { mode?: 'generate' | 'restyle'; referenceHint?: string }) => {
 	        const mode = opts?.mode ?? 'generate';
 	        const referenceHint = (opts?.referenceHint || '').trim();
-	        const persona = [
-	          'You are a senior avatar/character reference artist and production designer.',
-	          'Create a single 3x3 reference grid with nine panels for one character.',
-	          'All panels must show the SAME character with strict identity consistency.',
-	        ].join(' ');
 	        const palette = referenceState.palette;
 	        const paletteParts = [
 	          palette.primary ? `primary ${palette.primary}` : null,
@@ -1964,48 +2017,66 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 	        const height = referenceState.height_cm;
 	        const variationPolicy = referenceState.mode === 'RESTYLE_REFERENCE'
 	          ? [
-	              `Identity policy: must keep ${referenceState.must_keep.map((k) => mustKeepEnLabel[k]).join(', ') || 'identity'}.`,
-	              `May change ${referenceState.may_change.map((k) => mayChangeEnLabel[k]).join(', ') || 'nothing'} only when it does not break identity.`,
+	              'TURNAROUND FROM EXISTING CHARACTER MODE: use the uploaded character capture as the source of truth.',
+	              'Preserve the same person, same outfit design, same hairstyle, same accessories, same materials, same rendering language, same shading style, same mood, and same overall vibe.',
+	              'Do not redesign the character. Do not change the art style. Do not reinterpret the costume. Do not modernize or simplify the look.',
+	              'Your job is to expand one existing character capture into a full 3x3 turnaround reference sheet while keeping the original visual identity intact.',
 	            ].join(' ')
 	          : null;
 	        const positive = [
-	          persona,
-	          'Single character only.',
-          'Create a 3x3 grid layout with equal-sized cells.',
-          'No borders, no labels, no text.',
-          'Solid light gray background, seamless (no horizon line, no gradient).',
-          'Even studio lighting, soft shadows only.',
-          'Consistent scale and proportions across panels.',
-          'All panels must keep the EXACT same pose, stance, and expression. Only rotate the character; do not change pose.',
-          'The character must be standing upright in every panel (no sitting, kneeling, crouching, or leaning).',
-          'Hands must be empty; do not hold any objects or phones.',
-          'Outfit must remain identical across all panels (same clothing, colors, materials, accessories).',
-          'Each panel must be a UNIQUE angle; do not duplicate, mirror, or swap panel assignments.',
-          'If any panel repeats an angle, the entire grid is invalid and must be regenerated with correct angles.',
-	          'Define 0° as the character facing the camera directly (eyes toward camera).',
-	          'Rotate clockwise by exactly 45° per step for the sequence below.',
-          'Panel order left-to-right, top-to-bottom:',
-          'Use yaw angles relative to panel 2 (full-body front) as 0°: right = +, left = -. Rotate the entire body, not just the head.',
-	          '1) Front-facing upper-body shot (about 60% of frame height), 0°.',
-	          '2) Front-facing full-body shot, 0°.',
-	          '3) Based on panel 2, full-body shot rotated +45° (right 45°) ↘.',
-	          '4) Based on panel 2, full-body shot rotated +90° (right side profile) →.',
-	          '5) Based on panel 2, full-body shot rotated +135° (right back 3/4) ↗.',
-	          '6) Based on panel 2, full-body shot rotated +180° (back view) ↑.',
-	          '7) Based on panel 2, full-body shot rotated -45° (left 45°) ↙.',
-	          '8) Based on panel 2, full-body shot rotated -90° (left side profile) ←.',
-	          '9) Based on panel 2, full-body shot rotated -135° (left back 3/4) ↖.',
-	          'Panel 1 is upper-body only; panels 2-9 must be full-body head-to-toe with the entire body fully visible inside the frame.',
-	          mode === 'restyle'
-	            ? 'Restyle the reference character but keep identical facial structure, hairstyle silhouette, outfit silhouette, proportions, and key accessories across all panels.'
-	            : null,
-	          referenceHint ? `Reference: ${referenceHint}` : null,
-	          ageGroup ? `apparent age: ${ageGroup}` : null,
-	          gender ? `gender presentation: ${gender}` : null,
-	          height ? `approx height: ${height} cm` : null,
-	          styleTargetEn ? `style target: ${styleTargetEn}` : 'style target: clean studio render, neutral lighting, simple shading',
-	          paletteParts ? `palette: ${paletteParts}` : null,
+	          'You are a senior character turnaround artist and production reference-sheet designer.',
+	          'Create one single image containing a 3x3 equal-sized grid for ONE fictional character only.',
+	          'This is a production reference sheet, not a moodboard, not a collage of different poses.',
+	          'PRIMARY GOAL: produce nine panels showing the exact same character with strict identity consistency and strict view-direction compliance.',
+	          'All panels must preserve the same face, body proportions, hairstyle, outfit, materials, colors, accessories, expression, and neutral standing pose.',
+	          'Only the character facing direction changes across panels, using a clock-face system where facing the camera is 6 o’clock.',
+	          'PRIORITY ORDER: 1) identity consistency across all 9 panels, 2) exact assigned clock direction for each panel, 3) exact framing for each panel, 4) outfit/material/accessory consistency, 5) clean studio presentation.',
+	          'STUDIO SETUP: 3x3 equal-sized grid, no text, no labels, no watermarks, no logos, no borders.',
+	          'Use a plain light neutral gray seamless studio background, even studio lighting, minimal soft floor shadow, consistent white balance, consistent exposure, and consistent subject scale across panels.',
+	          'POSE AND IDENTITY LOCK: one character only, same neutral facial expression in every panel, same neutral standing pose in every panel, standing upright, arms relaxed naturally at the sides.',
+	          'No contrapposto, no walking pose, no gesture, no hand pose variation, no props, no phone, no handheld objects.',
+	          'No outfit change, no hairstyle change, no accessory change, no material change.',
+	          'The guide image is instruction-only. Any arrows, mannequin shapes, graphic markers, corner badges, or helper overlays from the guide image must NOT appear in the final output.',
+	          'Do not copy any arrows, icons, symbols, labels, numbers, or black graphic shapes from the guide image.',
+	          'If any arrow or guide overlay appears in the final image, the output is invalid.',
+	          'CRITICAL ANTI-FAILURE RULES: no duplicated panels, each panel must show a unique clock direction, do not improvise a new direction.',
+	          'Clock-direction accuracy is more important than artistic variation.',
+	          'If any panel would look too similar to another panel, correct only that panel so all nine views remain unique.',
+	          'Panels 2 to 9 must follow this clockwise clock-face sequence: 6시 -> 7시 30분 -> 9시 -> 10시 30분 -> 12시 -> 1시 30분 -> 3시 -> 4시 30분.',
+	          'The entire body must rotate together. Never rotate only the head. Never keep the torso front-facing while the head looks sideways.',
+	          'When the body is profile or rear, the face and eyes must follow that same clock direction. Do not make the character look back toward the camera.',
+	          ageGroup ? `CHARACTER SPECIFICATION: age group ${ageGroup}.` : null,
+	          gender ? `gender presentation ${gender}.` : null,
+	          height ? `height ${height} cm.` : null,
+	          referenceState.mode === 'RESTYLE_REFERENCE'
+	            ? 'Preserve the rendering language and visual style from the first reference image exactly. Do not restyle.'
+	            : styleTargetEn
+	              ? `style target ${styleTargetEn}.`
+	              : 'style target clean studio render, neutral lighting, simple shading.',
+	          paletteParts ? `palette ${paletteParts}.` : null,
 	          variationPolicy,
+	          mode === 'restyle'
+	            ? 'Use the provided reference image as the hard source of truth for who the person is. Style target is secondary to identity preservation.'
+	            : null,
+	          mode === 'generate'
+	            ? 'If a guide template image is provided, use it only to follow the 3x3 panel order and facing directions exactly. Do not render the guide arrows, mannequin, badges, or any helper graphics in the final output.'
+	            : null,
+	          mode === 'restyle'
+	            ? 'If two reference images are provided, use the first image as the hard identity source and the second image only as the turnaround direction guide. Keep the same person from the first image, follow the panel order and facing directions from the second image, and never copy arrows, mannequin shapes, badges, or overlay graphics from the second image.'
+	            : null,
+	          referenceHint ? `Reference hint: ${referenceHint}` : null,
+	          'VIEW ASSIGNMENT:',
+	          'Panel 1: Upper-body portrait, 6시 방향, chest-up, eye-level, facing straight toward the camera. Fill about 60% of panel height. Clean centered portrait framing.',
+	          'Panel 2: Full-body 6시 방향, eye-level, neutral stance, full head and full feet visible.',
+	          'Panel 3: Full-body 7시 30분 방향, three-quarter LEFT view. Both eyes visible. More of the character left side is visible than the right side.',
+	          'Panel 4: Full-body 9시 방향, LEFT profile view. Strict side view. Only one eye visible.',
+	          'Panel 5: Full-body 10시 30분 방향, rear three-quarter LEFT view. Mostly back visible. Only a slight amount of the left cheek and left side of the body visible.',
+	          'Panel 6: Full-body 12시 방향, direct back view. No face visible.',
+	          'Panel 7: Full-body 1시 30분 방향, rear three-quarter RIGHT view. Mostly back visible. Only a slight amount of the right cheek and right side of the body visible.',
+	          'Panel 8: Full-body 3시 방향, RIGHT profile view. Strict side view. Only one eye visible.',
+	          'Panel 9: Full-body 4시 30분 방향, three-quarter RIGHT view. Both eyes visible. More of the character right side is visible than the left side.',
+	          'CAMERA / RENDERING LANGUAGE: photorealistic studio reference sheet, panel 1 feels like an 85mm portrait lens, panels 2 to 9 feel like a 50mm full-body studio lens, eye-level camera for all panels, realistic anatomy, production-ready reference clarity.',
+	          'OUTPUT REQUIREMENTS: final output must be one single 3x3 reference grid image, maintain strict character resemblance in all panels, maintain identical clothing and materials in all panels, maintain identical pose except for yaw rotation, maintain clean empty unobstructed studio presentation.',
 	        ].filter(Boolean).join(' ');
         const negative = [
           'text',
@@ -2018,8 +2089,22 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
           'cropped feet',
           'missing head',
           'missing feet',
-          'half-body',
-          'truncated body',
+	          'wrong panel order',
+	          'duplicate panel angle',
+	          'mirrored duplicate angle',
+	          'arrows',
+	          'arrow icons',
+	          'direction markers',
+	          'overlay graphics',
+	          'corner badges',
+	          'panel badges',
+	          'panel numbers',
+	          'guide mannequin',
+	          'black graphic shapes',
+	          'head-only rotation',
+	          'front torso with turned head',
+          'profile torso with front-facing eyes',
+          'back torso with face visible toward camera',
           'deformed hands',
           'extra fingers',
           'outfit change',
@@ -2115,76 +2200,83 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         return;
       }
 
-      if (referenceState.mode === 'GENERATE_NEW') {
-        setWorkStatus('레퍼런스 그리드 생성 중...');
-        setGridProgress(null);
-        setBaseFrontUrl('');
-        setBaseFrontCutoutUrl('');
-        setTurnaroundUrls({});
-        setTurnaroundCutoutUrls({});
-        const gridPrompt = buildGridPromptEn({ mode: 'generate' });
-        const gridRes = await studioImage({
-          prompt: gridPrompt,
-          model,
-          aspect_ratio: aspectRatio,
-          num_images: 1,
-          resolution,
-          output_format: 'png',
-        });
-        const gridUrl = gridRes.images?.[0]?.url;
-        if (!gridUrl) throw new Error('grid image url missing');
+	      if (referenceState.mode === 'GENERATE_NEW') {
+	        setWorkStatus('레퍼런스 그리드 생성 중...');
+	        setGridProgress(null);
+	        setBaseFrontUrl('');
+	        setBaseFrontCutoutUrl('');
+	        setTurnaroundUrls({});
+	        setTurnaroundCutoutUrls({});
+	        const guideTemplateBlob = await loadTurnaroundGuideTemplateBlob();
+	        const guideTemplateFile = new File([guideTemplateBlob], `weav_reference_${nickname}_guide_template.png`, { type: 'image/png' });
+	        const uploadedGuideTemplate = await uploadStudioReferenceImage(guideTemplateFile);
+	        const gridPrompt = buildGridPromptEn({ mode: 'generate' });
+	        const gridRes = await studioImage({
+	          prompt: gridPrompt,
+	          model,
+	          aspect_ratio: aspectRatio,
+	          num_images: 1,
+	          reference_image_url: uploadedGuideTemplate.url,
+	          image_urls: [uploadedGuideTemplate.url],
+	          resolution,
+	          output_format: 'png',
+	        });
+	        const gridUrl = gridRes.images?.[0]?.url;
+	        if (!gridUrl) throw new Error('grid image url missing');
 
-        setWorkStatus('그리드 9분할 중...');
-        const tiles = await sliceGridImage(gridUrl);
-        const cutouts: string[] = [];
-        for (let i = 0; i < tiles.length; i += 1) {
-          setGridProgress({ current: i + 1, total: tiles.length, label: '타일 업로드' });
-          setWorkStatus(`타일 업로드 중... (${i + 1}/9)`);
-          const tileFile = new File([tiles[i]], `weav_reference_${nickname}_tile_${i + 1}.png`, { type: 'image/png' });
-          const uploaded = await uploadStudioReferenceImage(tileFile);
-          cutouts.push(uploaded.url);
-        }
+	        setWorkStatus('그리드 9분할 중...');
+	        const tiles = await sliceGridImage(gridUrl);
+	        const cutouts: string[] = [];
+	        for (let i = 0; i < tiles.length; i += 1) {
+	          setGridProgress({ current: i + 1, total: tiles.length, label: '타일 업로드' });
+	          setWorkStatus(`타일 업로드 중... (${i + 1}/9)`);
+	          const tileFile = new File([tiles[i]], `weav_reference_${nickname}_tile_${i + 1}.png`, { type: 'image/png' });
+	          const uploaded = await uploadStudioReferenceImage(tileFile);
+	          cutouts.push(uploaded.url);
+	        }
 
-        const primaryCutout = cutouts[1] || cutouts[0] || '';
-        setBaseFrontCutoutUrl(primaryCutout);
-        setReferenceImageUrl(primaryCutout);
+	        const primaryCutout = cutouts[1] || cutouts[0] || '';
+	        setBaseFrontCutoutUrl(primaryCutout);
+	        setReferenceImageUrl(primaryCutout);
 
-        setMeta({
-          generated_assets: {
-            grid_source_url: gridUrl,
-            grid_cutout_urls: cutouts,
-            base_front_cutout_url: primaryCutout,
-            turnaround_cutout_urls: {},
-          },
-        });
-        showToast('레퍼런스 생성이 완료되었습니다.');
-        setGridProgress(null);
-        return;
-      }
+	        setMeta({
+	          generated_assets: {
+	            grid_source_url: gridUrl,
+	            grid_cutout_urls: cutouts,
+	            base_front_cutout_url: primaryCutout,
+	            turnaround_cutout_urls: {},
+	          },
+	        });
+	        showToast('레퍼런스 생성이 완료되었습니다.');
+	        setGridProgress(null);
+	        return;
+	      }
 
       if (referenceState.mode === 'RESTYLE_REFERENCE') {
         if (!sourceImageUrl) return showToast('스타일 변경할 레퍼런스 이미지를 업로드해 주세요.');
-        const styleTarget = (referenceState.style_target || '').trim();
-        if (!styleTarget) return showToast('원하는 스타일 키워드를 입력해 주세요.');
-
         setBaseFrontUrl('');
         setBaseFrontCutoutUrl('');
         setTurnaroundUrls({});
         setTurnaroundCutoutUrls({});
+        const guideTemplateBlob = await loadTurnaroundGuideTemplateBlob();
+        const guideTemplateFile = new File([guideTemplateBlob], `weav_reference_${nickname}_guide_template.png`, { type: 'image/png' });
+        const uploadedGuideTemplate = await uploadStudioReferenceImage(guideTemplateFile);
         const refForEdit = sourceImageUrl;
+        const guideForEdit = uploadedGuideTemplate.url;
 
         setWorkStatus('리스타일 레퍼런스 그리드 생성 중...');
         setGridProgress(null);
-        const restylePrompt = buildGridPromptEn({
-          mode: 'restyle',
-          referenceHint: 'Use the provided reference image for identity and pose consistency.',
-        });
+	        const restylePrompt = buildGridPromptEn({
+	          mode: 'restyle',
+	          referenceHint: 'Two reference images are provided. Use the first image for exact person identity, outfit, and face consistency. Use the second image only for the turnaround panel order and facing directions.',
+	        });
         const gridRes = await studioImage({
           prompt: restylePrompt,
           model,
           aspect_ratio: aspectRatio,
           num_images: 1,
           reference_image_url: refForEdit,
+          image_urls: [refForEdit, guideForEdit],
           resolution,
           output_format: 'png',
         });
@@ -2234,6 +2326,7 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
     turnaroundUrls,
     turnaroundCutoutUrls,
     downloadJson,
+    loadTurnaroundGuideTemplateBlob,
     setReferenceImageUrl,
     setReferenceState,
     showToast,
@@ -2242,11 +2335,11 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const mode = referenceState.mode;
   const showUploadCard = mode !== 'GENERATE_NEW';
   const showExample = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE';
-  const showStyleTarget = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE';
+  const showStyleTarget = mode === 'GENERATE_NEW';
   const showBodyInfo = mode === 'GENERATE_NEW' || (mode === 'RESTYLE_REFERENCE' && showAdvanced);
   const showPalette = mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE' || showAdvanced;
-  const showKeepChange = mode === 'RESTYLE_REFERENCE';
-  const showStyleAnalysisBox = (mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE' || showAdvanced) && !!analyzedStylePrompt;
+  const showKeepChange = false;
+  const showStyleAnalysisBox = (mode === 'GENERATE_NEW' || showAdvanced) && !!analyzedStylePrompt;
   const hasPreview = gridCutoutUrls.length > 0;
 
   return (
@@ -2278,7 +2371,7 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
               { id: 'USE_EXISTING_CUTOUT', label: 'A. 컷아웃 그대로 사용', desc: '투명 PNG(배경제거) 이미지를 이미 갖고 있어요' },
               { id: 'REMOVE_BACKGROUND', label: 'B. AI 배경 제거해서 레퍼런스로', desc: '이미지는 있는데, AI로 배경 제거(컷아웃 PNG)가 필요해요' },
               { id: 'GENERATE_NEW', label: 'C. 레퍼런스 새로 생성', desc: '이미지가 없어서 캐릭터를 새로 만들고 싶어요' },
-              { id: 'RESTYLE_REFERENCE', label: 'D. 같은 인물로 스타일만 변경', desc: '아이덴티티는 유지하고 화풍/분위기만 바꾸고 싶어요' },
+              { id: 'RESTYLE_REFERENCE', label: 'D. 기존 캐릭터 캡처로 턴어라운드 생성', desc: '보유한 캐릭터 캡처 1장 기준으로 같은 화풍/분위기를 유지한 3x3 턴어라운드를 만들어요' },
             ] as Array<{ id: StudioReferenceMode; label: string; desc: string }>).map((m) => (
               <button
                 key={m.id}
@@ -2515,6 +2608,8 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
                 ? '투명 PNG(배경 제거된 이미지)를 업로드해 주세요.'
                 : mode === 'REMOVE_BACKGROUND'
                   ? '배경이 있는 이미지를 올리면 AI 배경 제거(모델 기반)로 컷아웃(투명 PNG)으로 만들어 드립니다. (복잡한 배경은 경계가 조금 거칠 수 있어요)'
+                : mode === 'RESTYLE_REFERENCE'
+                  ? '기준이 되는 캐릭터 캡처 이미지를 업로드해 주세요. 화풍과 분위기를 바꾸지 않고 같은 캐릭터의 턴어라운드를 생성합니다.'
                   : '기준이 되는 레퍼런스 이미지를 업로드해 주세요.'}
             </div>
             <input type="file" className="hidden" ref={fileInputRef} onChange={(e) => e.target.files?.[0] && handleImgUpload(e.target.files[0])} accept="image/*" />
@@ -3800,13 +3895,16 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
 // --- [Step 9: 썸네일 연구소] ---
 const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
-  const { thumbnailData, setThumbnailData, setCurrentStep } = useGlobal();
+  const { thumbnailData, setThumbnailData, setCurrentStep, videoFormat, selectedTopic, finalTopic } = useGlobal();
   const thumbnails = (thumbnailData.thumbnails?.length ?? 0) > 0 ? (thumbnailData.thumbnails as ThumbnailCandidate[]) : MOCK_THUMBNAILS;
   const ytUrlInput = thumbnailData.ytUrlInput || '';
   const ytThumbnailUrl = thumbnailData.ytThumbnailUrl;
   const [ytThumbnailError, setYtThumbnailError] = useState(false);
   const [isBenchmarking, setIsBenchmarking] = useState(false);
   const [benchmarkSummary, setBenchmarkSummary] = useState<string | null>(null);
+  const thumbnailAspectClass = videoFormat === '9:16' ? 'aspect-[9/16]' : 'aspect-video';
+  const videoFormatLabel = videoFormat === '9:16' ? '세로형(9:16)' : '가로형(16:9)';
+  const topicForThumbnail = (finalTopic || selectedTopic || '').trim();
 
   const loadYtThumbnail = () => {
     const id = getYoutubeVideoId(ytUrlInput);
@@ -3825,10 +3923,18 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
       showToast('먼저 유튜브 URL을 입력하고 썸네일을 불러와주세요.');
       return;
     }
+    if (!topicForThumbnail) {
+      showToast('먼저 주제를 확정한 뒤 벤치마킹 썸네일을 생성해주세요.');
+      return;
+    }
     setIsBenchmarking(true);
     setBenchmarkSummary(null);
     try {
-      const { imageUrl, analysisSummary } = await generateBenchmarkThumbnail(ytThumbnailUrl);
+      const { imageUrl, analysisSummary } = await generateBenchmarkThumbnail(
+        ytThumbnailUrl,
+        topicForThumbnail,
+        videoFormat === '9:16' ? '9:16' : '16:9'
+      );
       setBenchmarkSummary(analysisSummary);
       const newThumb: ThumbnailCandidate = {
         id: `bench-${Date.now()}`,
@@ -3887,7 +3993,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
       <SectionHeader
         kicker="Step 9 / Thumbnail"
         title="썸네일 연구소"
-        subtitle="유튜브 URL로 썸네일을 불러온 뒤 벤치마킹하면, 같은 톤의 썸네일을 AI가 생성합니다."
+        subtitle={`유튜브 URL로 썸네일을 불러온 뒤 벤치마킹하면, 같은 톤의 썸네일을 AI가 생성합니다. 최종 결과물은 현재 영상 포맷인 ${videoFormatLabel}으로 고정됩니다.`}
       />
 
       <div className="ui-card space-y-4">
@@ -3938,6 +4044,9 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
                 {benchmarkSummary}
               </div>
             )}
+            <div className="text-xs text-slate-500">
+              벤치마킹 원본이 가로/세로 무엇이든, 생성 결과는 Step 1에서 선택한 영상 포맷({videoFormatLabel})에 맞춰 제작됩니다.
+            </div>
           </div>
         )}
       </div>
@@ -3957,7 +4066,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
               onClick={() => selectThumb(t.id)}
               className={`rounded-2xl border overflow-hidden text-left transition-all ${t.isSelected ? 'border-primary/50 ring-1 ring-primary/35' : 'border-border/70 hover:border-border/90'}`}
             >
-              <div className="aspect-video bg-slate-100 flex items-center justify-center text-slate-400 font-medium text-sm overflow-hidden">
+              <div className={`${thumbnailAspectClass} bg-slate-100 flex items-center justify-center text-slate-400 font-medium text-sm overflow-hidden`}>
                 {t.imageUrl ? (
                   <img src={t.imageUrl} alt={t.title} className="w-full h-full object-cover" />
                 ) : (
@@ -3990,12 +4099,13 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
 // --- [Step 10: 완성 미리보기] ---
 const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
-  const { videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData, setCurrentStep } = useGlobal();
+  const { videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData, setCurrentStep, videoFormat } = useGlobal();
   const [isDownloading, setIsDownloading] = useState(false);
 
   const thumbnails = (thumbnailData?.thumbnails?.length ?? 0) > 0 ? thumbnailData.thumbnails as ThumbnailCandidate[] : [];
   const selectedThumb = thumbnails.find((t: ThumbnailCandidate) => t.isSelected) ?? thumbnails[0];
   const thumbImg = selectedThumb?.imageUrl ?? thumbnailData?.ytThumbnailUrl ?? null;
+  const previewAspectClass = videoFormat === '9:16' ? 'aspect-[9/16]' : 'aspect-video';
 
   const handleDownload = async () => {
     if (!videoUrl) {
@@ -4032,7 +4142,7 @@ const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
           {/* 영상/썸네일 영역 */}
           <div className="lg:col-span-7">
-            <div className="relative aspect-video bg-black rounded-xl overflow-hidden">
+            <div className={`relative ${previewAspectClass} bg-black rounded-xl overflow-hidden`}>
               {videoUrl ? (
                 <video
                   src={videoUrl}
@@ -4109,7 +4219,7 @@ const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 const AppContent = ({ projectName }: { projectName: string }) => {
   const {
     sessionId,
-    currentStep, setCurrentStep, isLoading, loadingMessage, setDescriptionInput, setIsFileLoaded, isDevMode, setIsDevMode,
+    currentStep, setCurrentStep, isLoading, loadingMessage, setDescriptionInput, setIsFileLoaded, isDevMode,
     videoFormat, setVideoFormat, scriptStyle, setScriptStyle, planningData, setPlanningData,
     selectedStyle, setSelectedStyle, selectedVoicePresetId, setSelectedVoicePresetId,
     subtitlesEnabled, setSubtitlesEnabled, burnInSubtitles, setBurnInSubtitles,
@@ -4395,13 +4505,6 @@ const AppContent = ({ projectName }: { projectName: string }) => {
           {currentStep === 10 && <PreviewStep showToast={showToast} />}
         </div>
       </main>
-      
-      <button
-        onClick={() => setIsDevMode(!isDevMode)}
-        className="fixed left-6 bottom-6 ui-btn ui-btn--secondary z-40"
-      >
-        <Terminal size={14} /> Dev
-      </button>
     </div>
   );
 };

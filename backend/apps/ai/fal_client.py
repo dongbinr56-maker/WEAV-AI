@@ -31,9 +31,12 @@ FAL_KLING = 'kling-ai/kling-v1'
 FAL_GEMINI3_PRO_IMAGE = 'fal-ai/gemini-3-pro-image-preview'
 # Gemini 3 Pro Image Preview Edit: image_urls required, up to 2 ref images
 FAL_GEMINI3_PRO_IMAGE_EDIT = 'fal-ai/gemini-3-pro-image-preview/edit'
-# Nano Banana Pro
-FAL_NANO_BANANA_PRO = 'fal-ai/nano-banana-pro'
-FAL_NANO_BANANA_PRO_EDIT = 'fal-ai/nano-banana-pro/edit'
+# Nano Banana 2
+FAL_NANO_BANANA_2 = 'fal-ai/nano-banana-2'
+FAL_NANO_BANANA_2_EDIT = 'fal-ai/nano-banana-2/edit'
+# Backward-compatible aliases used elsewhere in the backend.
+FAL_NANO_BANANA_PRO = FAL_NANO_BANANA_2
+FAL_NANO_BANANA_PRO_EDIT = FAL_NANO_BANANA_2_EDIT
 FAL_IMAGEUTILS_REMBG = 'fal-ai/imageutils/rembg'
 
 logger = logging.getLogger(__name__)
@@ -404,16 +407,17 @@ def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: st
     """
     num_images = max(1, min(4, num_images))
 
-    if 'nano-banana-pro/edit' in model.lower():
-        endpoint = FAL_NANO_BANANA_PRO_EDIT
-        image_urls = kwargs.get('image_urls') or []
+    if 'nano-banana-2/edit' in model.lower():
+        endpoint = FAL_NANO_BANANA_2_EDIT
+        ref_url = kwargs.get('reference_image_url')
+        image_urls = kwargs.get('image_urls') or ([ref_url] if ref_url else [])
         if not image_urls:
-            raise FALError('image_urls required for nano-banana-pro/edit')
+            raise FALError('image_urls required for nano-banana-2/edit')
         # ngrok/비공개 URL은 백엔드에서 받아 Data URI로 변환해 fal에 전달
-        image_urls = [_ensure_fal_reachable_image_url(u) for u in image_urls]
+        image_urls = [_ensure_fal_reachable_image_url(u) for u in image_urls if u][:14]
         allowed_ratio = ('auto', '21:9', '16:9', '3:2', '4:3', '5:4', '1:1', '4:5', '3:4', '2:3', '9:16')
         res = kwargs.get('resolution') or '1K'
-        res = res if res in ('1K', '2K', '4K') else '1K'
+        res = res if res in ('0.5K', '1K', '2K', '4K') else '1K'
         out_fmt = kwargs.get('output_format') or 'png'
         out_fmt = out_fmt if out_fmt in ('png', 'jpeg', 'webp') else 'png'
         payload = {
@@ -424,6 +428,36 @@ def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: st
             'output_format': out_fmt,
             'resolution': res,
         }
+        if kwargs.get('seed') is not None:
+            payload['seed'] = kwargs['seed']
+    elif 'nano-banana-2' in model.lower():
+        ref_url = kwargs.get('reference_image_url')
+        edit_urls = kwargs.get('image_urls') or ([ref_url] if ref_url else [])
+        edit_urls = [_ensure_fal_reachable_image_url(u) for u in edit_urls if u][:14]
+        allowed_ratio = ('auto', '21:9', '16:9', '3:2', '4:3', '5:4', '1:1', '4:5', '3:4', '2:3', '9:16')
+        res = kwargs.get('resolution') or '1K'
+        res = res if res in ('0.5K', '1K', '2K', '4K') else '1K'
+        out_fmt = kwargs.get('output_format') or 'png'
+        out_fmt = out_fmt if out_fmt in ('png', 'jpeg', 'webp') else 'png'
+        if edit_urls:
+            endpoint = FAL_NANO_BANANA_2_EDIT
+            payload = {
+                'prompt': prompt,
+                'num_images': num_images,
+                'image_urls': edit_urls,
+                'aspect_ratio': aspect_ratio if aspect_ratio in allowed_ratio else 'auto',
+                'output_format': out_fmt,
+                'resolution': res,
+            }
+        else:
+            endpoint = FAL_NANO_BANANA_2
+            payload = {
+                'prompt': prompt,
+                'num_images': num_images,
+                'aspect_ratio': aspect_ratio if aspect_ratio in allowed_ratio else 'auto',
+                'output_format': out_fmt,
+                'resolution': res,
+            }
         if kwargs.get('seed') is not None:
             payload['seed'] = kwargs['seed']
     elif 'gemini-3-pro-image-preview' in model.lower():

@@ -17,6 +17,8 @@ STUDIO_LLM_PROMPT_MAX = 100_000
 STUDIO_LLM_SYSTEM_MAX = 50_000
 STUDIO_IMAGE_PROMPT_MAX = 10_000
 STUDIO_TTS_TEXT_MAX = 5_000
+STUDIO_RESEARCH_QUERY_MAX = 12_000
+STUDIO_RESEARCH_CONTEXT_MAX = 12_000
 
 # SPA에서 쿠키 기반 세션 미사용 시 csrf_exempt 필요. 인증 추가 시 CSRF 토큰 처리로 전환 권장.
 
@@ -262,6 +264,242 @@ def _gemini_extract_text(response_data: dict) -> str:
     return ''
 
 
+def _safe_json_loads(value: str | bytes | None) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _string_list(value, limit: int = 12) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if text:
+            items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _gemini_api_key() -> str:
+    return config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
+
+
+def _normalize_google_ai_studio_model(model: str | None) -> str:
+    model_name = (model or 'google/gemini-2.5-flash').strip() or 'google/gemini-2.5-flash'
+    if model_name.startswith('google/'):
+        model_name = model_name.split('/', 1)[1]
+    return model_name or 'gemini-2.5-flash'
+
+
+def _gemini_generate_text(
+    prompt: str,
+    system_prompt: str | None = None,
+    model: str | None = None,
+    google_search: bool = False,
+    response_mime_type: str | None = None,
+    response_schema: dict | None = None,
+) -> str:
+    """
+    Google AI Studio Gemini direct call.
+    If `google_search` is True, enable Google Search grounding for fresh/public facts.
+    """
+    api_key = _gemini_api_key()
+    if not api_key:
+        raise RuntimeError('GEMINI_API_KEY (or GOOGLE_API_KEY) not configured')
+
+    model_name = _normalize_google_ai_studio_model(model)
+    url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent'
+    generation_config: dict[str, object] = {
+        'temperature': 0.2,
+    }
+    if response_mime_type:
+        generation_config['responseMimeType'] = response_mime_type
+    if response_schema:
+        generation_config['responseJsonSchema'] = response_schema
+
+    payload: dict[str, object] = {
+        'contents': [{
+            'role': 'user',
+            'parts': [{'text': prompt}],
+        }],
+        'generationConfig': generation_config,
+    }
+    if system_prompt:
+        payload['systemInstruction'] = {
+            'parts': [{'text': system_prompt}],
+        }
+    if google_search:
+        payload['tools'] = [{'google_search': {}}]
+
+    r = requests.post(
+        url,
+        headers={
+            'Content-Type': 'application/json',
+            'x-goog-api-key': api_key,
+        },
+        json=payload,
+        timeout=120,
+    )
+    if not r.ok:
+        try:
+            err = r.json().get('error') or {}
+            msg = err.get('message') or str(err)
+        except Exception:
+            msg = r.text or r.reason or f'HTTP {r.status_code}'
+        raise RuntimeError(f'Google AI Studio Gemini 요청 실패 ({r.status_code}): {msg}')
+
+    text = _gemini_extract_text(r.json())
+    if not text:
+        raise RuntimeError('Google AI Studio Gemini 응답에서 텍스트를 찾지 못했습니다.')
+    return text.strip()
+
+
+STUDIO_RESEARCH_SCHEMA = {
+    'type': 'object',
+    'additionalProperties': False,
+    'properties': {
+        'research_summary': {'type': 'string'},
+        'recommended_framing': {'type': 'string'},
+        'fact_status': {'type': 'string'},
+        'confirmed_facts': {'type': 'array', 'items': {'type': 'string'}},
+        'uncertain_points': {'type': 'array', 'items': {'type': 'string'}},
+        'stale_or_risky_claims': {'type': 'array', 'items': {'type': 'string'}},
+        'editorial_angles': {'type': 'array', 'items': {'type': 'string'}},
+    },
+    'required': [
+        'research_summary',
+        'recommended_framing',
+        'fact_status',
+        'confirmed_facts',
+        'uncertain_points',
+        'stale_or_risky_claims',
+        'editorial_angles',
+    ],
+}
+
+
+@csrf_exempt
+@ratelimit(key='ip', rate='15/m', method='POST', block=False)
+@require_http_methods(['POST'])
+def studio_research(request):
+    """
+    Studio research brief. POST JSON:
+    {
+      query, purpose?, topic?, tags?, description?, benchmark_summary?, benchmark_patterns?
+    }
+    -> {
+      used_search, search_query, external_context, research_summary, recommended_framing,
+      fact_status, confirmed_facts[], uncertain_points[], stale_or_risky_claims[], editorial_angles[]
+    }
+    """
+    if (r := _check_ratelimit(request)):
+        return r
+    body = _parse_json_body(request)
+    if not body or not isinstance(body.get('query'), str):
+        return JsonResponse({'error': 'query (string) required'}, status=400)
+
+    query = (body.get('query') or '').strip()
+    if not query:
+        return JsonResponse({'error': 'query required'}, status=400)
+    if len(query) > STUDIO_RESEARCH_QUERY_MAX:
+        return JsonResponse({'error': f'query는 {STUDIO_RESEARCH_QUERY_MAX}자 이내로 입력해 주세요.'}, status=400)
+
+    purpose = (body.get('purpose') or '').strip() if isinstance(body.get('purpose'), str) else ''
+    topic = (body.get('topic') or '').strip() if isinstance(body.get('topic'), str) else ''
+    description = (body.get('description') or '').strip() if isinstance(body.get('description'), str) else ''
+    benchmark_summary = (body.get('benchmark_summary') or '').strip() if isinstance(body.get('benchmark_summary'), str) else ''
+    tags = _string_list(body.get('tags'), limit=12)
+    benchmark_patterns = _string_list(body.get('benchmark_patterns'), limit=12)
+
+    try:
+        from apps.ai.retrieval import get_web_search_context
+    except ImportError as e:
+        logger.exception('studio_research import')
+        return JsonResponse({'error': str(e)}, status=503)
+
+    external_context = get_web_search_context(query, num=8) or ''
+    external_context = external_context.strip()
+    if len(external_context) > STUDIO_RESEARCH_CONTEXT_MAX:
+        external_context = external_context[:STUDIO_RESEARCH_CONTEXT_MAX].rstrip() + '\n…(truncated)'
+
+    if not external_context:
+        return JsonResponse({
+            'used_search': False,
+            'search_query': query,
+            'external_context': '',
+            'research_summary': '',
+            'recommended_framing': topic or query,
+            'fact_status': 'latest_search_unavailable',
+            'confirmed_facts': [],
+            'uncertain_points': [],
+            'stale_or_risky_claims': [],
+            'editorial_angles': [],
+        })
+
+    summarize_prompt = '\n'.join([
+        f'Purpose: {purpose or "studio planning"}',
+        f'Original topic or subject: {topic or "(none)"}',
+        f'Tags: {", ".join(tags) if tags else "(none)"}',
+        f'Description: {description or "(none)"}',
+        f'Benchmark summary: {benchmark_summary or "(none)"}',
+        f'Benchmark patterns: {" | ".join(benchmark_patterns) if benchmark_patterns else "(none)"}',
+        '',
+        'Use the following latest external context as the source of truth:',
+        external_context,
+        '',
+        'Return the JSON fact sheet only.',
+    ])
+    summarize_system = '\n'.join([
+        'You are the research editor for WEAV Studio.',
+        'Your job is to convert raw latest-search context into a clean fact sheet for topic recommendation, planning, and script writing.',
+        'Use ONLY the provided external context for time-sensitive claims. Do not invent facts beyond it.',
+        'Write all string outputs in Korean.',
+        'research_summary: 3~6 concise sentences summarizing the latest situation.',
+        'recommended_framing: a safer, up-to-date editorial framing or working topic the downstream planner should use.',
+        'fact_status: one short label like confirmed / mixed / evolving / latest_search_unavailable.',
+        'confirmed_facts: concrete facts clearly supported by the context.',
+        'uncertain_points: unresolved or conflicting points that should be handled carefully.',
+        'stale_or_risky_claims: outdated, misleading, or dangerous framings implied by the user input that the planner should avoid.',
+        'editorial_angles: safe but compelling angles that can still drive clicks without distorting the facts.',
+        'Return valid JSON only.',
+    ])
+
+    parsed = {}
+    try:
+        raw = _gemini_generate_text(
+            summarize_prompt,
+            system_prompt=summarize_system,
+            model='google/gemini-2.5-flash',
+            response_mime_type='application/json',
+            response_schema=STUDIO_RESEARCH_SCHEMA,
+        )
+        parsed = _safe_json_loads(raw)
+    except Exception:
+        logger.exception('studio_research summarize')
+
+    return JsonResponse({
+        'used_search': True,
+        'search_query': query,
+        'external_context': external_context,
+        'research_summary': (parsed.get('research_summary') or '').strip() if isinstance(parsed.get('research_summary'), str) else '',
+        'recommended_framing': (parsed.get('recommended_framing') or topic or query).strip() if isinstance(parsed.get('recommended_framing'), str) else (topic or query),
+        'fact_status': (parsed.get('fact_status') or 'confirmed').strip() if isinstance(parsed.get('fact_status'), str) else 'confirmed',
+        'confirmed_facts': _string_list(parsed.get('confirmed_facts'), limit=8),
+        'uncertain_points': _string_list(parsed.get('uncertain_points'), limit=6),
+        'stale_or_risky_claims': _string_list(parsed.get('stale_or_risky_claims'), limit=6),
+        'editorial_angles': _string_list(parsed.get('editorial_angles'), limit=8),
+    })
+
+
 def _gemini_generate_dual_benchmark_json(prompt: str, system_prompt: str, model: str | None = None) -> dict:
     """
     Dual benchmark JSON via fal OpenRouter LLM (openrouter/router).
@@ -308,7 +546,7 @@ def _gemini_generate_youtube_url_dual_benchmark_json(
     Gemini Video Understanding (YouTube URL direct input) with dual benchmark JSON output.
     (YouTube URL을 Gemini에 직접 넣는 기능은 OpenRouter가 아닌 Google Gemini API 경로입니다.)
     """
-    api_key = config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
+    api_key = _gemini_api_key()
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY (or GOOGLE_API_KEY) not configured')
 
@@ -398,7 +636,7 @@ def _gemini_generate_youtube_url_json(youtube_url: str, prompt: str, system_prom
     Gemini Video Understanding (YouTube URL direct input, preview feature).
     Docs: video understanding -> Pass YouTube URLs
     """
-    api_key = config('GEMINI_API_KEY', default='').strip() or config('GOOGLE_API_KEY', default='').strip()
+    api_key = _gemini_api_key()
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY (or GOOGLE_API_KEY) not configured')
 
@@ -1008,7 +1246,7 @@ def _parse_json_body(request):
 @ratelimit(key='ip', rate='30/m', method='POST', block=False)
 @require_http_methods(['POST'])
 def studio_llm(request):
-    """Studio Step 2~4 LLM. POST JSON: { prompt, system_prompt?, model? } -> { output }."""
+    """Studio Step 2~4 LLM. POST JSON: { prompt, system_prompt?, model?, provider?, google_search?, response_mime_type?, response_schema? } -> { output }."""
     if (r := _check_ratelimit(request)):
         return r
     body = _parse_json_body(request)
@@ -1031,10 +1269,26 @@ def studio_llm(request):
     if system_prompt and len(system_prompt) > STUDIO_LLM_SYSTEM_MAX:
         return JsonResponse({'error': f'system_prompt는 {STUDIO_LLM_SYSTEM_MAX}자 이내로 입력해 주세요.'}, status=400)
     model = body.get('model') or 'google/gemini-2.5-flash'
+    provider = (body.get('provider') or '').strip().lower()
+    google_search = bool(body.get('google_search'))
+    response_mime_type = body.get('response_mime_type') if isinstance(body.get('response_mime_type'), str) else None
+    response_schema = body.get('response_schema') if isinstance(body.get('response_schema'), dict) else None
     try:
+        if provider == 'google-ai-studio':
+            output = _gemini_generate_text(
+                prompt,
+                system_prompt=system_prompt,
+                model=model,
+                google_search=google_search,
+                response_mime_type=response_mime_type,
+                response_schema=response_schema,
+            )
+            return JsonResponse({'output': output or ''})
         output = chat_completion(prompt, model=model, system_prompt=system_prompt)
         return JsonResponse({'output': output or ''})
     except FALError as e:
+        return JsonResponse({'error': str(e)}, status=502)
+    except RuntimeError as e:
         return JsonResponse({'error': str(e)}, status=502)
     except Exception as e:
         logger.exception('studio_llm')
@@ -1070,6 +1324,15 @@ def studio_image(request):
         kwargs['seed'] = body['seed']
     if body.get('reference_image_url'):
         kwargs['reference_image_url'] = body['reference_image_url']
+    image_urls = body.get('image_urls')
+    if isinstance(image_urls, list):
+        clean_urls = [u.strip() for u in image_urls if isinstance(u, str) and u.strip()]
+        if clean_urls:
+            kwargs['image_urls'] = clean_urls[:14]
+    if body.get('resolution'):
+        kwargs['resolution'] = body['resolution']
+    if body.get('output_format'):
+        kwargs['output_format'] = body['output_format']
     try:
         images = image_generation_fal(prompt, model=model, aspect_ratio=aspect_ratio, num_images=num_images, **kwargs)
         return JsonResponse({'images': images})

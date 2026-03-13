@@ -5,6 +5,7 @@ const STUDIO_IMAGE = '/api/v1/studio/image/';
 const STUDIO_TTS = '/api/v1/studio/tts/';
 const STUDIO_YOUTUBE_CONTEXT = '/api/v1/studio/youtube-context/';
 const STUDIO_YOUTUBE_BENCHMARK_ANALYZE = '/api/v1/studio/youtube-benchmark-analyze/';
+const STUDIO_RESEARCH = '/api/v1/studio/research/';
 const STUDIO_EXPORT = '/api/v1/studio/export/';
 const STUDIO_EXPORT_JOB = '/api/v1/studio/export/job/';
 const STUDIO_UPLOAD_REFERENCE_IMAGE = '/api/v1/chat/image/upload-reference/';
@@ -15,6 +16,10 @@ export interface StudioLlmOptions {
   prompt: string;
   system_prompt?: string;
   model?: string;
+  provider?: 'fal-openrouter' | 'google-ai-studio';
+  google_search?: boolean;
+  response_mime_type?: string;
+  response_schema?: Record<string, unknown>;
 }
 
 export interface StudioImageOptions {
@@ -24,7 +29,8 @@ export interface StudioImageOptions {
   num_images?: number;
   seed?: number;
   reference_image_url?: string;
-  resolution?: '1K' | '2K' | '4K';
+  image_urls?: string[];
+  resolution?: '0.5K' | '1K' | '2K' | '4K';
   output_format?: 'png' | 'jpeg' | 'webp';
 }
 
@@ -80,19 +86,46 @@ export interface StudioYouTubeBenchmarkAnalysis {
   };
 }
 
+export interface StudioResearchOptions {
+  query: string;
+  purpose?: string;
+  topic?: string;
+  tags?: string[];
+  description?: string;
+  benchmark_summary?: string;
+  benchmark_patterns?: string[];
+}
+
+export interface StudioResearchPacket {
+  used_search: boolean;
+  search_query: string;
+  external_context: string;
+  research_summary: string;
+  recommended_framing: string;
+  fact_status: string;
+  confirmed_facts: string[];
+  uncertain_points: string[];
+  stale_or_risky_claims: string[];
+  editorial_angles: string[];
+}
+
 /** Studio Step 2~4 LLM (fal openrouter). */
 export async function studioLlm(options: StudioLlmOptions): Promise<{ output: string }> {
-  const { prompt, system_prompt, model } = options;
+  const { prompt, system_prompt, model, provider, google_search, response_mime_type, response_schema } = options;
   return api.post<{ output: string }>(STUDIO_LLM, {
     prompt,
     ...(system_prompt != null && { system_prompt }),
     ...(model != null && { model }),
+    ...(provider != null && { provider }),
+    ...(google_search != null && { google_search }),
+    ...(response_mime_type != null && { response_mime_type }),
+    ...(response_schema != null && { response_schema }),
   });
 }
 
 /** Studio scene image (fal imagen/flux/etc). */
 export async function studioImage(options: StudioImageOptions): Promise<{ images: Array<{ url: string }> }> {
-  const { prompt, model, aspect_ratio, num_images, seed, reference_image_url, resolution, output_format } = options;
+  const { prompt, model, aspect_ratio, num_images, seed, reference_image_url, image_urls, resolution, output_format } = options;
   return api.post<{ images: Array<{ url: string }> }>(STUDIO_IMAGE, {
     prompt,
     ...(model != null && { model }),
@@ -100,6 +133,8 @@ export async function studioImage(options: StudioImageOptions): Promise<{ images
     ...(num_images != null && { num_images }),
     ...(seed != null && { seed }),
     ...(reference_image_url != null && { reference_image_url }),
+    ...(reference_image_url != null && image_urls == null && { image_urls: [reference_image_url] }),
+    ...(image_urls != null && image_urls.length > 0 && { image_urls }),
     ...(resolution != null && { resolution }),
     ...(output_format != null && { output_format }),
   });
@@ -124,6 +159,11 @@ export async function studioYouTubeContext(url: string): Promise<StudioYouTubeCo
 /** YouTube benchmarking analysis (Gemini direct video + fallback). */
 export async function studioYouTubeBenchmarkAnalyze(url: string): Promise<StudioYouTubeBenchmarkAnalysis> {
   return api.post<StudioYouTubeBenchmarkAnalysis>(STUDIO_YOUTUBE_BENCHMARK_ANALYZE, { url });
+}
+
+/** Studio research brief using Vertex/web-search context + Gemini fact-sheet normalization. */
+export async function studioResearch(options: StudioResearchOptions): Promise<StudioResearchPacket> {
+  return api.post<StudioResearchPacket>(STUDIO_RESEARCH, options);
 }
 
 /** Upload a reference image and get a public URL (reuses chat image upload endpoint). */

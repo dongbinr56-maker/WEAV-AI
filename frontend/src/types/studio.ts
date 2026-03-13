@@ -92,6 +92,11 @@ export interface StudioScriptPlanningData {
   targetDuration: string;
 }
 
+export interface StudioTopicSuggestion {
+  title: string;
+  reason: string;
+}
+
 export interface StudioGlobalContextType {
   sessionId?: number;
   currentStep: number;
@@ -109,7 +114,6 @@ export interface StudioGlobalContextType {
   loadingMessage: string | null;
   setLoadingMessage: React.Dispatch<React.SetStateAction<string | null>>;
   isDevMode: boolean;
-  setIsDevMode: React.Dispatch<React.SetStateAction<boolean>>;
   videoFormat: string;
   setVideoFormat: React.Dispatch<React.SetStateAction<string>>;
   analysisResult: StudioAnalysisResult;
@@ -126,8 +130,8 @@ export interface StudioGlobalContextType {
   scriptSegments: StudioScriptSegment[];
   setScriptSegments: React.Dispatch<React.SetStateAction<StudioScriptSegment[]>>;
 
-  generatedTopics: string[];
-  setGeneratedTopics: React.Dispatch<React.SetStateAction<string[]>>;
+  generatedTopics: StudioTopicSuggestion[];
+  setGeneratedTopics: React.Dispatch<React.SetStateAction<StudioTopicSuggestion[]>>;
   selectedTopic: string;
   setSelectedTopic: React.Dispatch<React.SetStateAction<string>>;
   finalTopic: string;

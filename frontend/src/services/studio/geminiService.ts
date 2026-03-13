@@ -1,4 +1,10 @@
-import { studioLlm, studioImage, studioYouTubeBenchmarkAnalyze } from './studioFalApi';
+import {
+  studioLlm,
+  studioImage,
+  studioResearch,
+  studioYouTubeBenchmarkAnalyze,
+  type StudioResearchPacket,
+} from './studioFalApi';
 
 const LEAD_SCRIPTWRITER_INSTRUCTION = `
 # Role
@@ -32,6 +38,173 @@ function buildStudioPersona(options: {
     'If details are missing, you make reasonable assumptions and keep them explicit in the content.',
     'You do not mention this persona in the output.',
   ].join(' ');
+}
+
+const STUDIO_STEP3_MODEL = 'google/gemini-3-flash-preview';
+
+const STEP3_SPLIT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    contentType: { type: 'string', description: 'Step 1 content type planning in Korean.' },
+    summary: { type: 'string', description: 'Step 2 one-line story summary in Korean.' },
+    opening: { type: 'string', description: 'Step 3 opening plan in Korean.' },
+    body: { type: 'string', description: 'Step 4 body structure plan in Korean.' },
+    climax: { type: 'string', description: 'Step 5 climax and key message plan in Korean.' },
+    outro: { type: 'string', description: 'Step 6 outro and CTA plan in Korean.' },
+  },
+  required: ['contentType', 'summary', 'opening', 'body', 'climax', 'outro'],
+} as const;
+
+const STEP3_SCRIPT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    master_script: {
+      type: 'string',
+      description: 'Full Korean narration/script for the video, ready for production.',
+    },
+  },
+  required: ['master_script'],
+} as const;
+
+function buildStep3EditorialPersona(style?: string) {
+  return [
+    'Persona:',
+    'You are the lead planning director for a high-performing YouTube channel.',
+    'You combine three roles at once: senior content strategist, rigorous fact-checking researcher, and audience-retention script architect.',
+    'You also adopt the domain expertise that best matches the requested topic, so your planning reflects subject-matter fluency rather than generic writing.',
+    style
+      ? `You execute in the user-selected style with professional consistency: ${style}.`
+      : 'You adapt the tone and execution to the requested style with professional consistency.',
+    'You produce planning outputs that are publish-ready, concrete, and production-aware.',
+  ].join(' ');
+}
+
+function buildStep3ResearchRules() {
+  return [
+    'Workflow requirements:',
+    '1. First understand the user topic, target format, and benchmarking context.',
+    '2. If the topic involves current events, public figures, organizations, wars, elections, policy, business, science, health, or any unstable real-world facts, verify current public information before drafting.',
+    '3. Treat benchmarking inputs as packaging/style references, not as factual truth.',
+    '4. Do not carry stale assumptions forward. If a person is deceased, removed, inactive, or no longer relevant in the way implied by the prompt, do not write the plan as if they are still current.',
+    '5. If current facts remain uncertain after checking, avoid overclaiming and choose a durable framing that stays accurate.',
+    '6. Keep one coherent message spine from opening to outro.',
+    '7. Be concrete: include hooks, beats, evidence angles, pacing, scene/editorial cues, and CTA intent.',
+  ].join('\n');
+}
+
+async function callStep3Gemini(options: {
+  prompt: string;
+  systemPrompt: string;
+  googleSearch?: boolean;
+  responseSchema?: Record<string, unknown>;
+}) {
+  return studioLlm({
+    prompt: options.prompt,
+    system_prompt: options.systemPrompt,
+    model: STUDIO_STEP3_MODEL,
+    provider: 'google-ai-studio',
+    google_search: options.googleSearch ?? false,
+    ...(options.responseSchema
+      ? {
+          response_mime_type: 'application/json',
+          response_schema: options.responseSchema,
+        }
+      : {}),
+  });
+}
+
+type ResearchRequest = {
+  purpose: string;
+  topic?: string;
+  tags?: string[];
+  description?: string;
+  benchmarkSummary?: string;
+  benchmarkPatterns?: string[];
+};
+
+const researchCache = new Map<string, Promise<StudioResearchPacket | null>>();
+
+function normalizeTextInput(value: unknown, maxChars = 400): string {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+}
+
+function buildResearchQuery(options: ResearchRequest): string {
+  const pieces: string[] = [];
+  const topic = normalizeTextInput(options.topic, 160);
+  const tags = Array.isArray(options.tags) ? options.tags.map((tag) => String(tag || '').trim()).filter(Boolean).slice(0, 8) : [];
+  const description = normalizeTextInput(options.description, 220);
+  const benchmarkSummary = normalizeTextInput(options.benchmarkSummary, 160);
+
+  if (topic) pieces.push(topic);
+  if (tags.length) pieces.push(tags.join(' '));
+  if (description) pieces.push(description);
+  if (!topic && !tags.length && benchmarkSummary) pieces.push(benchmarkSummary);
+
+  const subject = pieces.join(' ').trim();
+  if (!subject) return '';
+  return `${subject} 최신 사실 확인`.slice(0, 500);
+}
+
+async function getStudioResearchPacket(options: ResearchRequest): Promise<StudioResearchPacket | null> {
+  const query = buildResearchQuery(options);
+  if (!query) return null;
+
+  const payload = {
+    query,
+    purpose: options.purpose,
+    ...(options.topic ? { topic: options.topic } : {}),
+    ...(options.tags?.length ? { tags: options.tags.slice(0, 12) } : {}),
+    ...(options.description ? { description: options.description } : {}),
+    ...(options.benchmarkSummary ? { benchmark_summary: options.benchmarkSummary } : {}),
+    ...(options.benchmarkPatterns?.length ? { benchmark_patterns: options.benchmarkPatterns.slice(0, 12) } : {}),
+  };
+  const cacheKey = JSON.stringify(payload);
+  const cached = researchCache.get(cacheKey);
+  if (cached) return cached;
+
+  const pending = studioResearch(payload)
+    .then((packet) => packet ?? null)
+    .catch(() => null);
+  researchCache.set(cacheKey, pending);
+  return pending;
+}
+
+function formatResearchBrief(packet: StudioResearchPacket | null | undefined): string {
+  if (!packet) return '';
+  const lines: string[] = [];
+  if (packet.used_search && packet.search_query) {
+    lines.push(`Latest research search query: ${packet.search_query}`);
+  }
+  if (packet.recommended_framing) {
+    lines.push(`Verified working framing:\n${packet.recommended_framing}`);
+  }
+  if (packet.research_summary) {
+    lines.push(`Verified research summary:\n${packet.research_summary}`);
+  }
+  if (packet.confirmed_facts?.length) {
+    lines.push(`Confirmed facts:\n- ${packet.confirmed_facts.join('\n- ')}`);
+  }
+  if (packet.stale_or_risky_claims?.length) {
+    lines.push(`Stale or risky claims to avoid:\n- ${packet.stale_or_risky_claims.join('\n- ')}`);
+  }
+  if (packet.uncertain_points?.length) {
+    lines.push(`Uncertain points:\n- ${packet.uncertain_points.join('\n- ')}`);
+  }
+  if (packet.editorial_angles?.length) {
+    lines.push(`Editorial angles that remain safe and compelling:\n- ${packet.editorial_angles.join('\n- ')}`);
+  }
+  if (!lines.length && packet.external_context) {
+    lines.push(`Latest external context:\n${normalizeTextInput(packet.external_context, 3000)}`);
+  }
+  return lines.join('\n\n');
+}
+
+function getVerifiedWorkingTopic(originalTopic: string, packet: StudioResearchPacket | null | undefined): string {
+  const recommended = typeof packet?.recommended_framing === 'string' ? packet.recommended_framing.trim() : '';
+  return recommended || originalTopic;
 }
 
 function getLocalIsoDate(): string {
@@ -101,6 +274,128 @@ async function freshenTopics(options: {
   return Array.isArray(parsed.topics) ? parsed.topics.slice(0, 12) : options.topics.slice(0, 12);
 }
 
+async function polishTopicsForCtr(options: {
+  topics: string[];
+  tags: string[];
+  description: string;
+  today: string;
+  benchmarkSummary?: string;
+  benchmarkPatterns?: string[];
+  research?: StudioResearchPacket | null;
+}) {
+  const benchmarkSummary = typeof options.benchmarkSummary === 'string' ? options.benchmarkSummary.trim() : '';
+  const benchmarkPatterns = Array.isArray(options.benchmarkPatterns) ? options.benchmarkPatterns.filter(Boolean).slice(0, 12) : [];
+  const researchBrief = formatResearchBrief(options.research);
+  const sys = [
+    buildStudioPersona({
+      role: 'elite YouTube title strategist and CTR-focused headline copywriter',
+      domain: 'high-click Korean video titles that create curiosity, tension, surprise, and stakes without lying',
+    }),
+    `Today is ${options.today}.`,
+    'You are rewriting weak topic ideas into titles people would actually want to click.',
+    'These are user-facing video titles, not internal planning notes.',
+    'Keep them in Korean. Return JSON only: { "topics": string[] }.',
+    'Make them sharper, more clickable, more emotionally charged, and more curiosity-driven.',
+    'Prefer conflict, reversal, hidden truth, consequence, taboo, showdown, collapse, survival, and "what really happened" angles when relevant.',
+    'Avoid dry lecture phrasing such as "분석", "영향은?", "무엇인가?", "스타일 분석", "전략 명암" unless absolutely necessary.',
+    'Avoid generic textbook titles. Every title should feel like an actual high-CTR YouTube title.',
+    'Do not fabricate facts, quotes, dates, scandals, deaths, crimes, or outcomes.',
+    'If a topic is based on current events or public figures, preserve factual safety while still maximizing click appeal.',
+    researchBrief ? 'A verified research brief may be provided. Treat it as the factual source of truth and do not rewrite titles back into stale or disproven framing.' : '',
+    'Aim for punchy Korean titles, usually one strong sentence or one sharp question.',
+  ].join(' ');
+
+  const prompt = [
+    `Tags: ${options.tags.join(', ') || '(none)'}`,
+    `Description: ${options.description || '(none)'}`,
+    benchmarkSummary || benchmarkPatterns.length
+      ? `Benchmarking packaging hints:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}` : '',
+    researchBrief ? `Verified research brief:\n${researchBrief}` : '',
+    '',
+    'Original topics (Korean):',
+    JSON.stringify(options.topics.slice(0, 12)),
+    '',
+    'Rewrite all topics into stronger, more clickable Korean YouTube titles.',
+    'Keep the core subject intact, but make the angle more provocative and curiosity-driven.',
+    'Return JSON only: { "topics": string[] }.',
+  ].filter(Boolean).join('\n');
+
+  const { output } = await studioLlm({
+    prompt,
+    system_prompt: sys,
+    model: 'google/gemini-2.5-flash',
+    provider: 'google-ai-studio',
+  });
+  const parsed = safeJsonParse<{ topics?: string[] }>(output, {});
+  return Array.isArray(parsed.topics) ? parsed.topics.slice(0, 12) : options.topics.slice(0, 12);
+}
+
+async function buildTopicReasons(options: {
+  topics: string[];
+  tags: string[];
+  description: string;
+  trendTitles?: string[];
+  benchmarkSummary?: string;
+  benchmarkPatterns?: string[];
+  research?: StudioResearchPacket | null;
+}) {
+  const trendTitles = Array.isArray(options.trendTitles) ? options.trendTitles.filter(Boolean).slice(0, 20) : [];
+  const benchmarkSummary = typeof options.benchmarkSummary === 'string' ? options.benchmarkSummary.trim() : '';
+  const benchmarkPatterns = Array.isArray(options.benchmarkPatterns) ? options.benchmarkPatterns.filter(Boolean).slice(0, 12) : [];
+  const researchBrief = formatResearchBrief(options.research);
+  const sys = [
+    buildStudioPersona({
+      role: 'YouTube content strategist and editorial reasoning analyst',
+      domain: 'explaining why a video title fits audience demand, topic intent, and packaging strategy',
+    }),
+    'Return JSON only: { "topics": [{ "title": string, "reason": string }] }.',
+    'For each title, write a short Korean reason explaining why it is recommended.',
+    'Each reason should mention the likely click trigger, audience curiosity, or fit with the user input/benchmark/trend signals.',
+    researchBrief ? 'If a verified research brief is provided, mention latest-fact relevance when it materially strengthens the recommendation.' : '',
+    'Keep each reason concise, about 1-2 sentences.',
+  ].join(' ');
+
+  const prompt = [
+    `Tags: ${options.tags.join(', ') || '(none)'}`,
+    `Description: ${options.description || '(none)'}`,
+    trendTitles.length ? `Trend signals:\n- ${trendTitles.join('\n- ')}` : '',
+    benchmarkSummary || benchmarkPatterns.length
+      ? `Benchmarking context:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}` : '',
+    researchBrief ? `Verified research brief:\n${researchBrief}` : '',
+    '',
+    'Titles to explain (Korean):',
+    JSON.stringify(options.topics.slice(0, 12)),
+    '',
+    'Return JSON only.',
+  ].filter(Boolean).join('\n');
+
+  const { output } = await studioLlm({
+    prompt,
+    system_prompt: sys,
+    model: 'google/gemini-2.5-flash',
+    provider: 'google-ai-studio',
+  });
+  const parsed = safeJsonParse<{ topics?: Array<{ title?: string; reason?: string }> }>(output, {});
+  if (!Array.isArray(parsed.topics)) {
+    return options.topics.map((title) => ({
+      title,
+      reason: '사용자 입력 키워드와 현재 관심 포인트를 바탕으로, 시청자가 바로 궁금해할 클릭 포인트가 살아 있는 제목입니다.',
+    }));
+  }
+
+  const reasonMap = new Map(
+    parsed.topics
+      .filter((item) => item && typeof item.title === 'string')
+      .map((item) => [String(item.title).trim(), typeof item.reason === 'string' ? item.reason.trim() : ''])
+  );
+
+  return options.topics.map((title) => ({
+    title,
+    reason: reasonMap.get(title)?.trim()
+      || '사용자 입력과 벤치마킹 맥락을 바탕으로, 시청자 호기심을 강하게 자극할 수 있는 제목이라 추천했습니다.',
+  }));
+}
+
 function truncateText(text: unknown, maxChars: number): string {
   const s = typeof text === 'string' ? text : JSON.stringify(text ?? '');
   if (s.length <= maxChars) return s;
@@ -117,21 +412,21 @@ function compactPlanningData(planningData: any, perFieldMaxChars = 1200) {
 }
 
 const mockTopics = [
-  "하루 5분 집중력 리셋 루틴",
-  "2026년 트렌드: 미니멀 라이프의 재해석",
-  "AI로 바뀌는 일상, 진짜 유용한 5가지",
-  "집중을 부르는 데스크 세팅 가이드",
-  "짧고 강한 스토리텔링 구조 3단계",
-  "무드 있는 영상 톤앤매너 만드는 법",
-  "영상 전개가 매끄러워지는 연결 트릭",
-  "시선을 붙잡는 첫 3초 설계",
-  "감성+정보 균형 잡는 스크립트 템플릿",
-  "반응 좋은 제목·썸네일 조합",
-  "저비용 고퀄리티 영상 제작 팁",
-  "촬영 없이 만드는 시네마틱 무드",
-  "혼자 운영하는 채널의 성장 전략",
-  "구독으로 이어지는 CTA 설계법",
-  "시청 유지율을 올리는 편집 리듬"
+  "하루 5분으로 집중력 되살아나는 진짜 이유",
+  "미니멀 라이프, 다들 좋다는데 오래 못 가는 이유",
+  "AI가 일상을 바꿨다더니 진짜 남는 건 이것뿐",
+  "집중 잘되는 책상, 사실 다들 이 한 가지를 놓친다",
+  "영상이 끝까지 보이게 만드는 스토리 구조는 따로 있다",
+  "감성 영상처럼 보이는데 결과가 다른 결정적 차이",
+  "지루한 영상이 갑자기 몰입되는 연결 트릭 3가지",
+  "첫 3초에서 시청자가 못 나가게 붙잡는 법",
+  "정보 영상인데 감성까지 터지는 대본 구조의 비밀",
+  "클릭되는 제목과 썸네일, 결국 이 조합에서 갈린다",
+  "돈 거의 안 쓰고도 고퀄 영상 나오는 세팅 공개",
+  "촬영 없이도 분위기 미쳤다는 말 듣는 영상 제작법",
+  "혼자 운영하는 채널이 의외로 더 빨리 크는 이유",
+  "구독 버튼 누르게 만드는 CTA, 다들 너무 약하게 쓴다",
+  "시청 유지율이 터지는 영상은 편집 리듬부터 다르다"
 ];
 
 const createMockImage = (label: string, aspectRatio: "9:16" | "16:9") => {
@@ -189,6 +484,14 @@ export const generateTopics = async (context: {
 }) => {
   const base = context.tags.length ? context.tags[0] : '콘텐츠';
   const today = getLocalIsoDate();
+  const research = await getStudioResearchPacket({
+    purpose: 'step2 topic generation',
+    tags: context.tags,
+    description: context.description,
+    benchmarkSummary: context.urlData?.summary,
+    benchmarkPatterns: context.urlData?.patterns,
+  });
+  const researchBrief = formatResearchBrief(research);
   const trendTitles = Array.isArray(context.trendData?.titles)
     ? context.trendData?.titles.map((t) => String(t || '').trim()).filter(Boolean).slice(0, 20)
     : [];
@@ -200,8 +503,15 @@ export const generateTopics = async (context: {
     'Reply with JSON only: { "topics": string[] }.',
     'Up to 12 items. All topic strings must be in Korean.',
     `Today is ${today}. Your suggestions must feel relevant as of today.`,
+    'These must feel like actual clickable YouTube video titles, not internal brainstorm notes.',
     'Do not propose obviously outdated issues or time-locked headlines.',
     'Do NOT invent specific real-world claims.',
+    researchBrief ? 'A verified latest-facts research brief may be provided. Treat it as the source of truth for entities, deaths, office status, wars, and current developments.' : '',
+    'Before proposing topics, verify named people, organizations, wars, elections, deaths, offices, and status changes against current public information.',
+    'If a named figure is deceased, removed from office, dissolved, or otherwise no longer current, do not suggest "recent updates" or "latest status" angles as if they are still active.',
+    'Prioritize high-CTR packaging: tension, stakes, surprise, reversal, hidden truth, fallout, showdown, urgency, and curiosity gaps.',
+    'Avoid bland academic wording. Do not default to dry titles like "분석", "영향은?", "무엇인가?" unless the angle is still sharply clickable.',
+    'Each title should make a viewer feel "I need to know what happened / why this matters / what the hidden truth is."',
     'Avoid specific dates and years unless they appear in the provided trend titles, benchmarking context, or user input.',
     'Avoid named public figures unless they appear in the provided trend titles, benchmarking context, or user input.',
     'If benchmarking context is provided, use it for structure/tone patterns only; do not reuse its specific names, organizations, dates, elections, or wars unless explicitly present in the user input.',
@@ -220,14 +530,23 @@ export const generateTopics = async (context: {
     `Description: ${context.description || '(none)'}.`,
     urlPart ? `${urlPart}\n\n(Important) Use benchmarking for style only, not subject-matter copying.` : '',
     trendPart ? `${trendPart}\n\n(Important) Prefer topics that match the demand signals and category intent.` : '',
+    researchBrief ? `\nVerified latest-facts research brief:\n${researchBrief}\n\n(Important) If the user framing or benchmark framing conflicts with the verified brief, follow the verified brief.` : '',
     '',
     'Propose 12 topic strings in Korean.',
+    '- Write them like real YouTube titles with click appeal.',
+    '- Strongly prefer curiosity, confrontation, consequence, secret, reversal, or "what really happened" framing when relevant.',
     '- Prefer evergreen angles or "recent" framing without asserting specific claims.',
     '- Avoid stale/time-locked references (e.g., 2022/2023/총선/대선/D-day) unless present in demand signals or user input.',
     'Return JSON only: { "topics": string[] }.',
   ].filter(Boolean).join('\n');
   try {
-    const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+    const { output } = await studioLlm({
+      prompt,
+      system_prompt: sys,
+      model: 'google/gemini-2.5-flash',
+      provider: 'google-ai-studio',
+      google_search: true,
+    });
     const parsed = safeJsonParse<{ topics?: string[] }>(output, {});
     let topics = Array.isArray(parsed.topics) ? parsed.topics.slice(0, 12) : mockTopics.map(t => `${base} · ${t}`).slice(0, 12);
     const userCtxText = `${context.tags.join(' ')} ${context.description || ''} ${trendTitles.join(' ')}`;
@@ -238,9 +557,45 @@ export const generateTopics = async (context: {
         /* keep original */
       }
     }
-    return { topics };
+    try {
+      topics = await polishTopicsForCtr({
+        topics,
+        tags: context.tags,
+        description: context.description,
+        today,
+        benchmarkSummary: context.urlData?.summary,
+        benchmarkPatterns: context.urlData?.patterns,
+        research,
+      });
+    } catch {
+      /* keep original */
+    }
+    try {
+      const topicsWithReasons = await buildTopicReasons({
+        topics,
+        tags: context.tags,
+        description: context.description,
+        trendTitles,
+        benchmarkSummary: context.urlData?.summary,
+        benchmarkPatterns: context.urlData?.patterns,
+        research,
+      });
+      return { topics: topicsWithReasons };
+    } catch {
+      return {
+        topics: topics.map((title) => ({
+          title,
+          reason: '사용자 입력과 시장 맥락을 바탕으로 클릭 유인을 만들 수 있는 주제라 추천했습니다.',
+        })),
+      };
+    }
   } catch (e) {
-    return { topics: mockTopics.map(t => `${base} · ${t}`).slice(0, 12) };
+    return {
+      topics: mockTopics.map(t => `${base} · ${t}`).slice(0, 12).map((title) => ({
+        title,
+        reason: '기본 CTR 패턴을 기준으로, 시청자 호기심과 클릭 가능성을 높이도록 추천한 주제입니다.',
+      })),
+    };
   }
 };
 
@@ -254,23 +609,25 @@ export const analyzeUrlPattern = async (url: string) => {
 };
 
 export const generatePlanningStep = async (stepName: string, context: any) => {
-  const persona = [
-    'Persona:',
-    'You are a senior YouTube long-form content strategist and script planning specialist.',
-    'You have deep, hands-on expertise in planning high-retention videos and translating creative direction into practical, shootable outlines.',
-    `You are also a subject-matter expert in the user-selected style: ${context.style || 'N/A'}.`,
-    'You understand the audience expectations, pacing, structure, and tone for that style and can execute it at a professional level.',
-    'You consistently deliver excellent, publish-ready planning drafts that are specific, actionable, and high quality.',
-  ].join(' ');
-
+  const research = await getStudioResearchPacket({
+    purpose: `step3 planning draft for ${stepName}`,
+    topic: context.topic,
+    description: context.referenceScript,
+    benchmarkSummary: context.benchmarkSummary,
+    benchmarkPatterns: context.benchmarkPatterns,
+  });
+  const researchBrief = formatResearchBrief(research);
+  const verifiedTopic = getVerifiedWorkingTopic(context.topic, research);
   const sys = [
-    persona,
+    buildStep3EditorialPersona(context.style || 'N/A'),
+    buildStep3ResearchRules(),
     'Task:',
     'Write a rich, detailed planning draft in Korean for the requested step.',
     'Output only the planning text (Korean), no JSON, no "result:" label, no code blocks.',
     'Be concrete and actionable: include specifics (facts to cover, beats, pacing, hooks, CTA ideas, editing/graphic cues) rather than vague advice.',
     'Strictly match the user-selected style and tone.',
     'Adapt the depth and pacing to the target length.',
+    researchBrief ? 'A verified latest-facts research brief may be provided. Treat it as the source of truth and do not slip back into stale framing from the original user input.' : '',
     context.styleRules ? `Style rules:\n${context.styleRules}` : '',
     'Before you answer, silently verify the draft follows the style rules. If not, revise it until it does.',
   ].join(' ');
@@ -280,9 +637,11 @@ export const generatePlanningStep = async (stepName: string, context: any) => {
   const benchmarkPatterns = Array.isArray(context.benchmarkPatterns) ? context.benchmarkPatterns.filter(Boolean) : [];
   const prompt = [
     `Step: ${stepName}`,
-    `Topic: ${context.topic}`,
+    `Original user topic: ${context.topic}`,
+    `Verified working topic: ${verifiedTopic}`,
     `Style (user-selected): ${context.style || 'N/A'}`,
     `Target length: ${context.length || 'short'}`,
+    researchBrief ? `Verified research brief:\n${researchBrief}` : '',
     masterPlanText ? `Master plan context (Korean, may be truncated):\n${truncateText(masterPlanText, 4000)}\nUse it to keep this step consistent with the overall plan.` : '',
     benchmarkSummary || benchmarkPatterns.length
       ? `Benchmarking context:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}\nReflect the summary/patterns where relevant, without copying verbatim.`
@@ -293,7 +652,11 @@ export const generatePlanningStep = async (stepName: string, context: any) => {
     'Use a clear structure with short sections and bullet points.',
   ].filter(Boolean).join('\n');
   try {
-    const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+    const { output } = await callStep3Gemini({
+      prompt,
+      systemPrompt: sys,
+      googleSearch: true,
+    });
     const text = (output || '').trim().replace(/^```\w*\s*|\s*```$/g, '').replace(/^["']?result["']?\s*:\s*["']?|["']\s*$/g, '').trim();
     if (text.length > 10) return { result: text };
     const parsed = safeJsonParse<{ result?: string }>(output, {});
@@ -301,24 +664,29 @@ export const generatePlanningStep = async (stepName: string, context: any) => {
     return { result: fromJson.length > 10 ? fromJson : `[${stepName}] 주제: ${context.topic}` };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { result: `[${stepName}] 주제: ${context.topic}\n\n⚠️ API 오류: ${msg}\n(백엔드 .env에 FAL_KEY 설정 여부와 서버 로그를 확인해 주세요. 직접 입력도 가능합니다.)` };
+    return { result: `[${stepName}] 주제: ${context.topic}\n\n⚠️ API 오류: ${msg}\n(백엔드 .env에 GEMINI_API_KEY 또는 GOOGLE_API_KEY 설정 여부와 서버 로그를 확인해 주세요. 직접 입력도 가능합니다.)` };
   }
 };
 
 export const rewritePlanningStep = async (stepName: string, context: any) => {
-  const persona = [
-    'Persona:',
-    'You are a senior YouTube long-form content strategist and script planning specialist.',
-    `You are also a subject-matter expert in the user-selected style: ${context.style || 'N/A'}.`,
-    'You are excellent at rewriting drafts to better match a target style and constraints.',
-  ].join(' ');
-
+  const research = await getStudioResearchPacket({
+    purpose: `step3 rewrite for ${stepName}`,
+    topic: context.topic,
+    description: context.instruction,
+    benchmarkSummary: context.benchmarkSummary,
+    benchmarkPatterns: context.benchmarkPatterns,
+  });
+  const researchBrief = formatResearchBrief(research);
+  const verifiedTopic = getVerifiedWorkingTopic(context.topic, research);
   const sys = [
-    persona,
+    buildStep3EditorialPersona(context.style || 'N/A'),
+    buildStep3ResearchRules(),
     'Task:',
     'Rewrite the given planning draft in Korean.',
     'Output only the rewritten planning text (Korean), no JSON, no "result:" label, no code blocks.',
     context.styleRules ? `Style rules:\n${context.styleRules}` : '',
+    'Preserve the strongest verified facts and remove stale, weak, or contradictory claims.',
+    researchBrief ? 'A verified latest-facts research brief may be provided. Follow it over the original draft whenever they conflict.' : '',
     'Before you answer, silently verify the rewrite follows the style rules. If not, revise it until it does.',
   ].filter(Boolean).join(' ');
 
@@ -331,10 +699,12 @@ export const rewritePlanningStep = async (stepName: string, context: any) => {
 
   const prompt = [
     `Step: ${stepName}`,
-    `Topic: ${context.topic}`,
+    `Original user topic: ${context.topic}`,
+    `Verified working topic: ${verifiedTopic}`,
     `Style (user-selected): ${context.style || 'N/A'}`,
     mode ? `Rewrite mode: ${mode}` : '',
     userInstruction ? `User request: ${userInstruction}` : '',
+    researchBrief ? `Verified research brief:\n${researchBrief}` : '',
     masterPlanText ? `Master plan context (Korean, may be truncated):\n${truncateText(masterPlanText, 4000)}\nKeep the rewrite consistent with the master plan.` : '',
     benchmarkSummary || benchmarkPatterns.length
       ? `Benchmarking context:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}\nReflect the summary/patterns where relevant, without copying verbatim.`
@@ -346,7 +716,11 @@ export const rewritePlanningStep = async (stepName: string, context: any) => {
     'Rewrite in Korean with a clear structure (short sections + bullet points where helpful).',
   ].filter(Boolean).join('\n');
 
-  const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+  const { output } = await callStep3Gemini({
+    prompt,
+    systemPrompt: sys,
+    googleSearch: true,
+  });
   const text = (output || '').trim().replace(/^```\w*\s*|\s*```$/g, '').replace(/^["']?result["']?\s*:\s*["']?|["']\s*$/g, '').trim();
   return { result: text || currentText };
 };
@@ -361,22 +735,24 @@ export const generateMasterPlan = async (context: {
   existingMasterPlan?: string;
   planningData?: any;
 }) => {
-  const persona = [
-    'Persona:',
-    'You are a senior YouTube long-form content strategist and master planner.',
-    `You are also a subject-matter expert in the user-selected style: ${context.style || 'N/A'}.`,
-    'You specialize in producing cohesive end-to-end planning documents that remain consistent across all sections.',
-    'You consistently deliver excellent, publish-ready planning drafts that are specific, actionable, and high quality.',
-  ].join(' ');
-
+  const research = await getStudioResearchPacket({
+    purpose: 'step3 master plan generation',
+    topic: context.topic,
+    benchmarkSummary: context.benchmarkSummary,
+    benchmarkPatterns: context.benchmarkPatterns,
+  });
+  const researchBrief = formatResearchBrief(research);
+  const verifiedTopic = getVerifiedWorkingTopic(context.topic, research);
   const sys = [
-    persona,
+    buildStep3EditorialPersona(context.style || 'N/A'),
+    buildStep3ResearchRules(),
     'Task:',
     'Write a single, cohesive master plan in Korean that includes all 6 planning sections (1~6) end-to-end.',
     'Output only the planning text (Korean), no JSON, no "result:" label, no code blocks.',
     'Use explicit section headers exactly like: "1) 콘텐츠 타입", "2) 전체 이야기 한 줄 요약", "3) 오프닝 기획", "4) 본문 구성 설계", "5) 클라이맥스/핵심 메시지", "6) 아웃트로 설계".',
     'Be concrete and actionable: include beats, hooks, pacing, examples, B-roll/graphics notes, and CTA ideas.',
     'Strictly match the user-selected style and tone.',
+    researchBrief ? 'A verified latest-facts research brief may be provided. Treat it as the factual baseline for all 6 sections.' : '',
     context.styleRules ? `Style rules:\n${context.styleRules}` : '',
     'Before you answer, silently verify the plan follows the style rules and that all 6 sections are consistent with the same topic and message spine.',
   ].filter(Boolean).join(' ');
@@ -387,9 +763,11 @@ export const generateMasterPlan = async (context: {
   const existingParts = compactPlanningData(context.planningData || {});
 
   const prompt = [
-    `Topic: ${context.topic}`,
+    `Original user topic: ${context.topic}`,
+    `Verified working topic: ${verifiedTopic}`,
     `Style (user-selected): ${context.style || 'N/A'}`,
     `Target length: ${context.length || 'short'}`,
+    researchBrief ? `Verified research brief:\n${researchBrief}` : '',
     benchmarkSummary || benchmarkPatterns.length
       ? `Benchmarking context:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}\nReflect the summary/patterns where relevant, without copying verbatim.`
       : '',
@@ -399,7 +777,11 @@ export const generateMasterPlan = async (context: {
     'Write the master plan in Korean with the exact 1)~6) headers.',
   ].filter(Boolean).join('\n');
 
-  const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+  const { output } = await callStep3Gemini({
+    prompt,
+    systemPrompt: sys,
+    googleSearch: true,
+  });
   const text = (output || '').trim().replace(/^```\w*\s*|\s*```$/g, '').replace(/^["']?result["']?\s*:\s*["']?|["']\s*$/g, '').trim();
   return { result: text || existingPlan };
 };
@@ -413,17 +795,14 @@ export const splitMasterPlanToSteps = async (context: {
   benchmarkPatterns?: string[];
 }) => {
   const sys = [
-    buildStudioPersona({
-      role: 'senior editor and planning-structure specialist',
-      domain: 'extracting structured planning sections from long-form plans',
-      style: context.style,
-    }),
-    'You extract the 6 planning sections from the given master plan and return ONLY JSON.',
-    'Return JSON only with these keys: { "contentType": string, "summary": string, "opening": string, "body": string, "climax": string, "outro": string }.',
-    'All values must be Korean strings.',
+    buildStep3EditorialPersona(context.style || 'N/A'),
+    'Task:',
+    'Extract the 6 planning sections from the given master plan.',
+    'Return a valid JSON object only.',
+    'All values must be Korean strings that preserve the original planning meaning.',
     context.styleRules ? `Style rules:\n${context.styleRules}` : '',
     'Ensure the extracted sections remain consistent with the topic and match the style rules.',
-  ].filter(Boolean).join(' ');
+  ].filter(Boolean).join('\n');
 
   const benchmarkSummary = typeof context.benchmarkSummary === 'string' ? context.benchmarkSummary.trim() : '';
   const benchmarkPatterns = Array.isArray(context.benchmarkPatterns) ? context.benchmarkPatterns.filter(Boolean) : [];
@@ -439,7 +818,11 @@ export const splitMasterPlanToSteps = async (context: {
     'Return the extracted JSON only.',
   ].filter(Boolean).join('\n');
 
-  const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+  const { output } = await callStep3Gemini({
+    prompt,
+    systemPrompt: sys,
+    responseSchema: STEP3_SPLIT_SCHEMA as unknown as Record<string, unknown>,
+  });
   const parsed = safeJsonParse<{
     contentType?: string;
     summary?: string;
@@ -462,8 +845,25 @@ export const splitMasterPlanToSteps = async (context: {
 export function targetDurationToSeconds(td: string | undefined): number {
   if (!td || typeof td !== 'string') return 0;
   const s = td.trim().toLowerCase();
-  if (s.endsWith('s')) return Math.max(0, parseInt(s, 10) || 0);
-  if (s.endsWith('m')) return Math.max(0, (parseInt(s, 10) || 0) * 60);
+  if (!s) return 0;
+  const compact = s.replace(/\s+/g, '');
+
+  const clock = compact.match(/^(\d+):(\d{1,2})$/);
+  if (clock) {
+    return Math.max(0, (parseInt(clock[1], 10) || 0) * 60 + (parseInt(clock[2], 10) || 0));
+  }
+
+  if (/^\d+s$/.test(compact)) return Math.max(0, parseInt(compact, 10) || 0);
+  if (/^\d+m$/.test(compact)) return Math.max(0, (parseInt(compact, 10) || 0) * 60);
+
+  let total = 0;
+  const minMatch = compact.match(/(\d+)(?:m|min|mins|minute|minutes|분)/);
+  const secMatch = compact.match(/(\d+)(?:s|sec|secs|second|seconds|초)/);
+  if (minMatch) total += (parseInt(minMatch[1], 10) || 0) * 60;
+  if (secMatch) total += parseInt(secMatch[1], 10) || 0;
+  if (total > 0) return total;
+
+  if (/^\d+$/.test(compact)) return Math.max(0, parseInt(compact, 10) || 0);
   return 0;
 }
 
@@ -482,16 +882,23 @@ export const synthesizeMasterScript = async (context: {
   benchmarkSummary?: string;
   benchmarkPatterns?: string[];
 }) => {
+  const research = await getStudioResearchPacket({
+    purpose: 'step3 master script generation',
+    topic: context.topic,
+    benchmarkSummary: context.benchmarkSummary,
+    benchmarkPatterns: context.benchmarkPatterns,
+  });
+  const researchBrief = formatResearchBrief(research);
+  const verifiedTopic = getVerifiedWorkingTopic(context.topic, research);
   const sys = [
-    buildStudioPersona({
-      role: 'Lead Scriptwriter for a YouTube channel with over 1 million subscribers',
-      domain: 'YouTube long-form scripting with high-retention storytelling',
-      style: context.style,
-    }),
+    buildStep3EditorialPersona(context.style || 'N/A'),
     LEAD_SCRIPTWRITER_INSTRUCTION.trim(),
+    buildStep3ResearchRules(),
     'Reply with JSON only: { "master_script": string }.',
     'master_script must be the full script text in Korean.',
     'Do not output any keys other than master_script.',
+    'The script must stay aligned with the verified current facts and the planning spine.',
+    researchBrief ? 'A verified latest-facts research brief may be provided. Follow it over any stale wording in the original topic or planning draft.' : '',
     context.styleRules ? `Style rules:\n${context.styleRules}` : '',
   ].join('\n');
   const planning = context.planningData || {};
@@ -503,9 +910,11 @@ export const synthesizeMasterScript = async (context: {
   const benchmarkSummary = typeof context.benchmarkSummary === 'string' ? context.benchmarkSummary.trim() : '';
   const benchmarkPatterns = Array.isArray(context.benchmarkPatterns) ? context.benchmarkPatterns.filter(Boolean) : [];
   const prompt = [
-    `Topic: ${context.topic}.`,
+    `Original user topic: ${context.topic}.`,
+    `Verified working topic: ${verifiedTopic}.`,
     `Style (user-selected): ${context.style}.`,
     durationGuide ? durationGuide : '',
+    researchBrief ? `Verified research brief:\n${researchBrief}` : '',
     benchmarkSummary || benchmarkPatterns.length
       ? `Benchmarking summary: ${benchmarkSummary || '(none)'}. Benchmarking patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}.`
       : '',
@@ -515,7 +924,12 @@ export const synthesizeMasterScript = async (context: {
     'Return JSON.',
   ].filter(Boolean).join(' ');
   try {
-    const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
+    const { output } = await callStep3Gemini({
+      prompt,
+      systemPrompt: sys,
+      googleSearch: true,
+      responseSchema: STEP3_SCRIPT_SCHEMA as unknown as Record<string, unknown>,
+    });
     const parsed = safeJsonParse<{ master_script?: string }>(output, {});
     const fallback = `제목: ${context.topic}\n\n오프닝: 오늘은 ${context.topic}의 핵심을 60초 안에 정리합니다.\n본문: 핵심 포인트 1, 2, 3을 짧고 명확하게 전달합니다.\n클라이맥스: 가장 중요한 인사이트를 한 문장으로 강조합니다.\n아웃트로: 다음 영상 예고와 구독 CTA로 마무리합니다.`;
     return { master_script: typeof parsed.master_script === 'string' ? parsed.master_script : fallback };
@@ -714,9 +1128,14 @@ export const generateMetaData = async (context: {
 };
 
 /**
- * 유튜브 썸네일을 분석하고, 그 스타일을 벤치마킹한 이미지 URL 생성
+ * 유튜브 썸네일을 분석하고, 현재 프로젝트 포맷에 맞춘 벤치마킹 이미지 URL 생성
  */
-export const generateBenchmarkThumbnail = async (referenceThumbnailUrl: string): Promise<{ imageUrl: string; analysisSummary: string }> => {
+export const generateBenchmarkThumbnail = async (
+  referenceThumbnailUrl: string,
+  targetTopic: string,
+  aspectRatio: '9:16' | '16:9',
+): Promise<{ imageUrl: string; analysisSummary: string }> => {
+  const normalizedTopic = (targetTopic || '').trim();
   const sys = [
     buildStudioPersona({
       role: 'senior YouTube thumbnail analyst and creative director',
@@ -725,7 +1144,11 @@ export const generateBenchmarkThumbnail = async (referenceThumbnailUrl: string):
     'Analyze a thumbnail and write one short sentence summarizing its style (composition, color, typography).',
     'Reply with plain text only in Korean.',
   ].join(' ');
-  const prompt = `Analyze this thumbnail URL style: ${referenceThumbnailUrl}. One sentence summary in Korean.`;
+  const prompt = [
+    `Analyze this thumbnail URL style: ${referenceThumbnailUrl}.`,
+    normalizedTopic ? `The new thumbnail topic is: ${normalizedTopic}.` : '',
+    'One sentence summary in Korean focused on composition, color, packaging, and click trigger.',
+  ].filter(Boolean).join(' ');
   let analysisSummary = '레퍼런스 썸네일의 구도·색감·타이포 톤을 분석해 동일한 분위기의 벤치마킹 이미지를 생성했습니다.';
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
@@ -735,17 +1158,30 @@ export const generateBenchmarkThumbnail = async (referenceThumbnailUrl: string):
   }
   try {
     const { images } = await studioImage({
-      prompt: `YouTube thumbnail style: ${analysisSummary}. High click-through, eye-catching.`,
-      model: 'fal-ai/imagen4/preview',
-      aspect_ratio: '16:9',
+      prompt: [
+        'Create a NEW YouTube thumbnail by benchmarking the provided reference thumbnail image.',
+        normalizedTopic ? `The new thumbnail must be about this topic: ${normalizedTopic}.` : 'Create a strong, clickable benchmarked thumbnail.',
+        `Thumbnail benchmark summary: ${analysisSummary}.`,
+        'Use the reference thumbnail only as a packaging benchmark for composition, crop, color energy, focal hierarchy, emotional intensity, and click-through structure.',
+        'Do NOT copy the original thumbnail literally.',
+        'Do NOT keep the original subject, original face, original text, or original branding unless it naturally matches the requested topic.',
+        'Rebuild the thumbnail so it fits the new topic while preserving the same level of visual punch and benchmarked packaging quality.',
+        `Final output must be composed for a ${aspectRatio} thumbnail canvas.`,
+      ].join(' '),
+      model: 'fal-ai/nano-banana-2/edit',
+      aspect_ratio: aspectRatio,
       num_images: 1,
+      reference_image_url: referenceThumbnailUrl,
+      image_urls: [referenceThumbnailUrl],
+      resolution: '4K',
+      output_format: 'png',
     });
     const url = images?.[0]?.url;
     if (url) return { imageUrl: url, analysisSummary };
   } catch (e) {
     /* fallback */
   }
-  return { imageUrl: createMockImage('벤치마킹 썸네일', '16:9'), analysisSummary };
+  return { imageUrl: createMockImage('벤치마킹 썸네일', aspectRatio), analysisSummary };
 };
 
 export const translateToKorean = async (englishText: string): Promise<string> => {

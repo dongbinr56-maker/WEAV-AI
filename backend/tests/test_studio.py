@@ -44,6 +44,102 @@ class StudioLLMTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()['output'], '안녕하세요')
 
+    @patch('apps.core.views._gemini_generate_text')
+    def test_studio_llm_google_ai_studio_ok(self, mock_gemini):
+        mock_gemini.return_value = '최신 조사 기반 주제'
+        resp = self.client.post(
+            '/api/v1/studio/llm/',
+            data={
+                'prompt': '이란 하메네이 관련 최신 주제 조사 후 추천',
+                'model': 'google/gemini-2.5-flash',
+                'provider': 'google-ai-studio',
+                'google_search': True,
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['output'], '최신 조사 기반 주제')
+        mock_gemini.assert_called_once()
+
+    @patch('apps.core.views._gemini_generate_text')
+    def test_studio_llm_google_ai_studio_with_schema_ok(self, mock_gemini):
+        mock_gemini.return_value = '{"master_script":"ok"}'
+        resp = self.client.post(
+            '/api/v1/studio/llm/',
+            data={
+                'prompt': '구조화된 응답 테스트',
+                'provider': 'google-ai-studio',
+                'google_search': True,
+                'response_mime_type': 'application/json',
+                'response_schema': {
+                    'type': 'object',
+                    'properties': {'master_script': {'type': 'string'}},
+                    'required': ['master_script'],
+                },
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()['output'], '{"master_script":"ok"}')
+        mock_gemini.assert_called_once()
+
+
+class StudioResearchTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+    def test_studio_research_missing_query_400(self):
+        resp = self.client.post(
+            '/api/v1/studio/research/',
+            data={},
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    @patch('apps.core.views._gemini_generate_text')
+    @patch('apps.ai.retrieval.get_web_search_context')
+    def test_studio_research_ok(self, mock_search, mock_gemini):
+        mock_search.return_value = 'AP: 알리 하메네이는 2026년 2월 28일 사망. 후계 구도 진행 중.'
+        mock_gemini.return_value = (
+            '{"research_summary":"최신 보도 기준으로 하메네이 사망 이후 후계 구도가 핵심이다.",'
+            '"recommended_framing":"하메네이 사망 이후, 이란 권력 재편의 진짜 승자는 누구인가?",'
+            '"fact_status":"confirmed",'
+            '"confirmed_facts":["알리 하메네이는 최근 보도 기준 사망이 확인됐다."],'
+            '"uncertain_points":["권력 재편의 최종 승자는 아직 유동적이다."],'
+            '"stale_or_risky_claims":["하메네이의 최근 근황을 다루는 식의 프레이밍"],'
+            '"editorial_angles":["사망 이후 권력 재편과 국제 파장"]}'
+        )
+
+        resp = self.client.post(
+            '/api/v1/studio/research/',
+            data={
+                'query': '하메네이 최신 사실 확인',
+                'purpose': 'step2 topic generation',
+                'topic': '이란 최고 지도자 하메네이 관련 주제',
+                'tags': ['이란', '하메네이'],
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertTrue(data['used_search'])
+        self.assertEqual(data['fact_status'], 'confirmed')
+        self.assertIn('사망', data['research_summary'])
+        self.assertTrue(data['stale_or_risky_claims'])
+
+    @patch('apps.ai.retrieval.get_web_search_context')
+    def test_studio_research_without_context_returns_empty_brief(self, mock_search):
+        mock_search.return_value = ''
+        resp = self.client.post(
+            '/api/v1/studio/research/',
+            data={'query': '일반적인 콘텐츠 아이디어 최신 사실 확인'},
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertFalse(data['used_search'])
+        self.assertEqual(data['confirmed_facts'], [])
+
 
 class StudioImageTests(TestCase):
     def setUp(self):
@@ -64,6 +160,51 @@ class StudioImageTests(TestCase):
             content_type='application/json',
         )
         self.assertEqual(resp.status_code, 400)
+
+    @patch('apps.ai.fal_client.image_generation_fal')
+    def test_studio_image_forwards_image_urls_and_render_options(self, mock_image_generation):
+        mock_image_generation.return_value = [{'url': 'https://example.com/generated.png'}]
+        resp = self.client.post(
+            '/api/v1/studio/image/',
+            data={
+                'prompt': 'reference turnaround sheet',
+                'model': 'fal-ai/nano-banana-2/edit',
+                'aspect_ratio': '9:16',
+                'image_urls': ['https://example.com/a.png', 'https://example.com/b.png'],
+                'resolution': '4K',
+                'output_format': 'png',
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        mock_image_generation.assert_called_once()
+        _, kwargs = mock_image_generation.call_args
+        self.assertEqual(kwargs['aspect_ratio'], '9:16')
+        self.assertEqual(kwargs['image_urls'], ['https://example.com/a.png', 'https://example.com/b.png'])
+        self.assertEqual(kwargs['resolution'], '4K')
+        self.assertEqual(kwargs['output_format'], 'png')
+
+    @patch('apps.ai.fal_client.image_generation_fal')
+    def test_studio_image_forwards_reference_image_url(self, mock_image_generation):
+        mock_image_generation.return_value = [{'url': 'https://example.com/generated.png'}]
+        resp = self.client.post(
+            '/api/v1/studio/image/',
+            data={
+                'prompt': 'reference turnaround sheet',
+                'model': 'fal-ai/nano-banana-2/edit',
+                'aspect_ratio': '9:16',
+                'reference_image_url': 'https://example.com/a.png',
+                'resolution': '4K',
+                'output_format': 'png',
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        mock_image_generation.assert_called_once()
+        _, kwargs = mock_image_generation.call_args
+        self.assertEqual(kwargs['reference_image_url'], 'https://example.com/a.png')
+        self.assertEqual(kwargs['resolution'], '4K')
+        self.assertEqual(kwargs['output_format'], 'png')
 
 
 class StudioTTSTests(TestCase):
