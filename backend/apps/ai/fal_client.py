@@ -427,9 +427,12 @@ def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: st
             'aspect_ratio': aspect_ratio if aspect_ratio in allowed_ratio else 'auto',
             'output_format': out_fmt,
             'resolution': res,
+            'limit_generations': bool(kwargs.get('limit_generations', True)),
         }
         if kwargs.get('seed') is not None:
             payload['seed'] = kwargs['seed']
+        if kwargs.get('enable_web_search') is not None:
+            payload['enable_web_search'] = bool(kwargs['enable_web_search'])
     elif 'nano-banana-2' in model.lower():
         ref_url = kwargs.get('reference_image_url')
         edit_urls = kwargs.get('image_urls') or ([ref_url] if ref_url else [])
@@ -448,6 +451,7 @@ def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: st
                 'aspect_ratio': aspect_ratio if aspect_ratio in allowed_ratio else 'auto',
                 'output_format': out_fmt,
                 'resolution': res,
+                'limit_generations': bool(kwargs.get('limit_generations', True)),
             }
         else:
             endpoint = FAL_NANO_BANANA_2
@@ -457,9 +461,12 @@ def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: st
                 'aspect_ratio': aspect_ratio if aspect_ratio in allowed_ratio else 'auto',
                 'output_format': out_fmt,
                 'resolution': res,
+                'limit_generations': bool(kwargs.get('limit_generations', True)),
             }
         if kwargs.get('seed') is not None:
             payload['seed'] = kwargs['seed']
+        if kwargs.get('enable_web_search') is not None:
+            payload['enable_web_search'] = bool(kwargs['enable_web_search'])
     elif 'gemini-3-pro-image-preview' in model.lower():
         ref_url = kwargs.get('reference_image_url')
         edit_urls = kwargs.get('image_urls') or ([ref_url] if ref_url else [])
@@ -619,8 +626,8 @@ def remove_background_fal(image_url: str, crop_to_bbox: bool = False) -> dict:
     raise FALError('rembg response missing image url')
 
 
-# MiniMax Speech 2.6 HD: Studio Step 5 TTS
-FAL_TTS_MINIMAX = 'fal-ai/minimax/speech-2.6-hd'
+# ElevenLabs Turbo v2.5: Studio Step 6 TTS
+FAL_TTS_ELEVENLABS_TURBO_V25 = 'fal-ai/elevenlabs/tts/turbo-v2.5'
 
 # TTS 시 자연스러운 한국어 읽기: 숫자 → 관형형 (한, 두, 세, 열, 스무...)
 _ONES = ('', '한', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉')
@@ -689,37 +696,68 @@ def _normalize_korean_for_tts(text: str) -> str:
     return result
 
 
-def tts_minimax(
+def tts_elevenlabs(
     text: str,
-    voice_id: str = 'Wise_Woman',
+    voice: str = 'Jessica',
     speed: float = 1.0,
-    output_format: str = 'url',
+    language_code: str = 'ko',
+    stability: float = 0.45,
+    similarity_boost: float = 0.8,
+    style: float = 0.2,
+    previous_text: str | None = None,
+    next_text: str | None = None,
 ) -> dict:
     """
-    fal.ai MiniMax Speech 2.6 HD TTS.
+    fal.ai ElevenLabs Turbo v2.5 TTS.
     Returns dict with 'url' (audio URL) and 'duration_ms'.
-    voice_id: preset e.g. Wise_Woman, or custom_voice_id from voice-clone.
     """
     raw = (text or '').strip()
     normalized = _normalize_korean_for_tts(raw)
     payload = {
-        'prompt': normalized,
-        'output_format': output_format if output_format in ('url', 'hex') else 'url',
-        'voice_setting': {
-            'voice_id': voice_id,
-            'speed': max(0.5, min(2.0, speed)),
-            'vol': 1,
-            'pitch': 0,
-        },
+        'text': normalized,
+        'voice': voice or 'Jessica',
+        'language_code': (language_code or 'ko').strip() or 'ko',
+        'speed': max(0.7, min(1.2, speed)),
+        'stability': max(0.0, min(1.0, stability)),
+        'similarity_boost': max(0.0, min(1.0, similarity_boost)),
+        'style': max(0.0, min(1.0, style)),
     }
-    r = requests.post(f'{FAL_BASE}/{FAL_TTS_MINIMAX}', headers=_fal_headers(), json=payload, timeout=120)
+
+    if previous_text and previous_text.strip():
+        payload['previous_text'] = _normalize_korean_for_tts(previous_text.strip()[:1200])
+    if next_text and next_text.strip():
+        payload['next_text'] = _normalize_korean_for_tts(next_text.strip()[:1200])
+
+    r = requests.post(f'{FAL_BASE}/{FAL_TTS_ELEVENLABS_TURBO_V25}', headers=_fal_headers(), json=payload, timeout=120)
     r.raise_for_status()
     data = r.json()
     audio = data.get('audio') or {}
     url = audio.get('url') or ''
+    duration_ms = (
+        data.get('duration_ms')
+        or audio.get('duration_ms')
+        or audio.get('duration')
+        or 0
+    )
     if not url:
-        raise FALError(data.get('error', 'No audio URL'))
-    return {'url': url, 'duration_ms': data.get('duration_ms', 0)}
+        error_msg = data.get('error') or data.get('detail') or 'No audio URL'
+        if (voice or '').strip() and voice != 'Jessica':
+            fallback_payload = {**payload, 'voice': 'Jessica'}
+            r2 = requests.post(f'{FAL_BASE}/{FAL_TTS_ELEVENLABS_TURBO_V25}', headers=_fal_headers(), json=fallback_payload, timeout=120)
+            r2.raise_for_status()
+            data2 = r2.json()
+            audio2 = data2.get('audio') or {}
+            fallback_url = audio2.get('url') or ''
+            fallback_duration_ms = (
+                data2.get('duration_ms')
+                or audio2.get('duration_ms')
+                or audio2.get('duration')
+                or 0
+            )
+            if fallback_url:
+                return {'url': fallback_url, 'duration_ms': fallback_duration_ms}
+        raise FALError(error_msg)
+    return {'url': url, 'duration_ms': duration_ms}
 
 
 # fal FFmpeg Compose: 이미지+오디오 클립을 하나의 영상으로 합성

@@ -21,12 +21,13 @@ export interface StudioScene {
   audioDurationSec?: number;
 }
 
-export type StudioReferenceMode = 'USE_EXISTING_CUTOUT' | 'REMOVE_BACKGROUND' | 'GENERATE_NEW' | 'RESTYLE_REFERENCE';
+export type StudioReferenceMode = 'USE_EXISTING_REFERENCE' | 'GENERATE_NEW' | 'RESTYLE_REFERENCE';
 export type StudioReferenceView = 'front' | 'side_right' | 'back' | 'three_quarter_front';
 
 export type StudioReferencePalette = { primary: string; secondary: string; accent: string };
 
 export type StudioReferenceMetadata = {
+  generated_mode?: StudioReferenceMode;
   nickname: string;
   style_tags: string[];
   age_group: string;
@@ -53,6 +54,9 @@ export type StudioReferenceState = {
   mode: StudioReferenceMode;
   nickname: string;
   style_target: string;
+  style_preset_id: string;
+  style_option_ids: string[];
+  custom_style_keywords: string[];
   age_group: string;
   gender: string;
   height_cm: number | null;
@@ -60,7 +64,6 @@ export type StudioReferenceState = {
   may_change: StudioReferenceMetadata['allowed_variations']['may_change'];
   palette: StudioReferencePalette;
   constraints: { must_not_have: string[] };
-  crop_to_bbox: boolean;
   metadata: StudioReferenceMetadata | null;
 };
 
@@ -97,8 +100,17 @@ export interface StudioTopicSuggestion {
   reason: string;
 }
 
+export interface StudioVisualReferenceAsset {
+  id: string;
+  url: string;
+  name: string;
+}
+
+export type StudioTopicGenerationBasis = 'idea-only' | 'benchmark-only' | 'idea-plus-benchmark';
+
 export interface StudioGlobalContextType {
   sessionId?: number;
+  resetStudioProject: () => void;
   currentStep: number;
   setCurrentStep: React.Dispatch<React.SetStateAction<number>>;
   activeTags: string[];
@@ -122,6 +134,8 @@ export interface StudioGlobalContextType {
   setInputMode: React.Dispatch<React.SetStateAction<'tag' | 'description'>>;
   descriptionInput: string;
   setDescriptionInput: React.Dispatch<React.SetStateAction<string>>;
+  topicGenerationBasis: StudioTopicGenerationBasis | null;
+  setTopicGenerationBasis: React.Dispatch<React.SetStateAction<StudioTopicGenerationBasis | null>>;
   scenes: StudioScene[];
   setScenes: React.Dispatch<React.SetStateAction<StudioScene[]>>;
   /** Step 6 음성 합성 후 씬별 재생 길이(초). Step 7 영상 생성 시 이 값을 우선 사용. */
@@ -176,6 +190,10 @@ export interface StudioGlobalContextType {
   setBurnInSubtitles: React.Dispatch<React.SetStateAction<boolean>>;
   referenceImageUrl: string;
   setReferenceImageUrl: React.Dispatch<React.SetStateAction<string>>;
+  visualReferenceAssets: StudioVisualReferenceAsset[];
+  setVisualReferenceAssets: React.Dispatch<React.SetStateAction<StudioVisualReferenceAsset[]>>;
+  useVisualReferencesInSceneGeneration: boolean;
+  setUseVisualReferencesInSceneGeneration: React.Dispatch<React.SetStateAction<boolean>>;
 
   // Step 4 레퍼런스 오케스트레이션 상태
   referenceState: StudioReferenceState;

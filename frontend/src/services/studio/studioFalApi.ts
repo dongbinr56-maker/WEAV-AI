@@ -32,12 +32,20 @@ export interface StudioImageOptions {
   image_urls?: string[];
   resolution?: '0.5K' | '1K' | '2K' | '4K';
   output_format?: 'png' | 'jpeg' | 'webp';
+  limit_generations?: boolean;
+  enable_web_search?: boolean;
 }
 
 export interface StudioTtsOptions {
   text: string;
-  voice_id?: string;
+  voice?: string;
   speed?: number;
+  language_code?: string;
+  stability?: number;
+  similarity_boost?: number;
+  style?: number;
+  previous_text?: string;
+  next_text?: string;
 }
 
 export interface StudioYouTubeContext {
@@ -125,7 +133,7 @@ export async function studioLlm(options: StudioLlmOptions): Promise<{ output: st
 
 /** Studio scene image (fal imagen/flux/etc). */
 export async function studioImage(options: StudioImageOptions): Promise<{ images: Array<{ url: string }> }> {
-  const { prompt, model, aspect_ratio, num_images, seed, reference_image_url, image_urls, resolution, output_format } = options;
+  const { prompt, model, aspect_ratio, num_images, seed, reference_image_url, image_urls, resolution, output_format, limit_generations, enable_web_search } = options;
   return api.post<{ images: Array<{ url: string }> }>(STUDIO_IMAGE, {
     prompt,
     ...(model != null && { model }),
@@ -137,16 +145,24 @@ export async function studioImage(options: StudioImageOptions): Promise<{ images
     ...(image_urls != null && image_urls.length > 0 && { image_urls }),
     ...(resolution != null && { resolution }),
     ...(output_format != null && { output_format }),
+    ...(limit_generations != null && { limit_generations }),
+    ...(enable_web_search != null && { enable_web_search }),
   });
 }
 
-/** Studio Step 5 TTS (MiniMax). */
+/** Studio Step 6 TTS (ElevenLabs Turbo v2.5). */
 export async function studioTts(options: StudioTtsOptions): Promise<{ url: string; duration_ms: number }> {
-  const { text, voice_id, speed } = options;
+  const { text, voice, speed, language_code, stability, similarity_boost, style, previous_text, next_text } = options;
   return api.post<{ url: string; duration_ms: number }>(STUDIO_TTS, {
     text,
-    ...(voice_id != null && { voice_id }),
+    ...(voice != null && { voice }),
     ...(speed != null && { speed }),
+    ...(language_code != null && { language_code }),
+    ...(stability != null && { stability }),
+    ...(similarity_boost != null && { similarity_boost }),
+    ...(style != null && { style }),
+    ...(previous_text != null && { previous_text }),
+    ...(next_text != null && { next_text }),
   });
 }
 
