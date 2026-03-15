@@ -15,6 +15,7 @@ function AppContentInner() {
   const { currentSession, createSession } = useApp();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showStudioDialog, setShowStudioDialog] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(() => window.innerWidth < 1024);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const prevSidebarOpen = useRef(false);
   const mainRef = useRef<HTMLElement>(null);
@@ -33,6 +34,14 @@ function AppContentInner() {
     }
   }, [currentSession?.kind, currentSession?.id]);
 
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 1023px)');
+    const syncViewport = () => setIsMobileViewport(mediaQuery.matches);
+    syncViewport();
+    mediaQuery.addEventListener('change', syncViewport);
+    return () => mediaQuery.removeEventListener('change', syncViewport);
+  }, []);
+
   return (
     <LayoutProvider sidebarOpen={sidebarOpen}>
       <div className="relative min-h-screen bg-background text-foreground flex flex-col overflow-hidden">
@@ -46,10 +55,18 @@ function AppContentInner() {
           onMenuClick={() => setSidebarOpen((v) => !v)}
         />
         <Sidebar open={sidebarOpen} onStudioClick={() => setShowStudioDialog(true)} />
+        {isMobileViewport && sidebarOpen && (
+          <button
+            type="button"
+            aria-label="사이드바 닫기"
+            onClick={() => setSidebarOpen(false)}
+            className="fixed inset-0 top-14 z-30 bg-background/55 backdrop-blur-[2px] lg:hidden"
+          />
+        )}
         <main
           ref={mainRef}
           className={`flex-1 flex flex-col min-w-0 min-h-0 pt-14 transition-[margin] duration-300 ease-out ${
-            sidebarOpen ? 'ml-72' : 'ml-0'
+            sidebarOpen && !isMobileViewport ? 'ml-72' : 'ml-0'
           }`}
         >
           {currentSession?.kind === 'studio' ? (

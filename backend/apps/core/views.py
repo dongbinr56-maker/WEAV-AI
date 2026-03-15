@@ -1333,6 +1333,10 @@ def studio_image(request):
         kwargs['resolution'] = body['resolution']
     if body.get('output_format'):
         kwargs['output_format'] = body['output_format']
+    if body.get('limit_generations') is not None:
+        kwargs['limit_generations'] = bool(body.get('limit_generations'))
+    if body.get('enable_web_search') is not None:
+        kwargs['enable_web_search'] = bool(body.get('enable_web_search'))
     try:
         images = image_generation_fal(prompt, model=model, aspect_ratio=aspect_ratio, num_images=num_images, **kwargs)
         return JsonResponse({'images': images})
@@ -1377,14 +1381,14 @@ def studio_bg_remove(request):
 @ratelimit(key='ip', rate='60/m', method='POST', block=False)
 @require_http_methods(['POST'])
 def studio_tts(request):
-    """Studio Step 5 TTS. POST JSON: { text, voice_id? } -> { url, duration_ms }."""
+    """Studio Step 6 TTS. POST JSON: { text, voice?, speed?, language_code?, stability?, similarity_boost?, style?, previous_text?, next_text? } -> { url, duration_ms }."""
     if (r := _check_ratelimit(request)):
         return r
     body = _parse_json_body(request)
     if not body or not isinstance(body.get('text'), str):
         return JsonResponse({'error': 'text (string) required'}, status=400)
     try:
-        from apps.ai.fal_client import tts_minimax
+        from apps.ai.fal_client import tts_elevenlabs
         from apps.ai.errors import FALError
     except ImportError as e:
         logger.exception('studio_tts import')
@@ -1394,7 +1398,7 @@ def studio_tts(request):
         return JsonResponse({'error': 'text required'}, status=400)
     if len(text) > STUDIO_TTS_TEXT_MAX:
         return JsonResponse({'error': f'text는 {STUDIO_TTS_TEXT_MAX}자 이내로 입력해 주세요.'}, status=400)
-    voice_id = body.get('voice_id') or 'Wise_Woman'
+    voice = body.get('voice') or 'Jessica'
     speed = body.get('speed')
     if speed is not None:
         try:
@@ -1403,8 +1407,36 @@ def studio_tts(request):
             speed = 1.0
     else:
         speed = 1.0
+    language_code = body.get('language_code') if isinstance(body.get('language_code'), str) else 'ko'
+    stability = body.get('stability')
     try:
-        result = tts_minimax(text, voice_id=voice_id, speed=speed, output_format='url')
+        stability = float(stability) if stability is not None else 0.45
+    except (TypeError, ValueError):
+        stability = 0.45
+    similarity_boost = body.get('similarity_boost')
+    try:
+        similarity_boost = float(similarity_boost) if similarity_boost is not None else 0.8
+    except (TypeError, ValueError):
+        similarity_boost = 0.8
+    style = body.get('style')
+    try:
+        style = float(style) if style is not None else 0.2
+    except (TypeError, ValueError):
+        style = 0.2
+    previous_text = body.get('previous_text') if isinstance(body.get('previous_text'), str) else None
+    next_text = body.get('next_text') if isinstance(body.get('next_text'), str) else None
+    try:
+        result = tts_elevenlabs(
+            text,
+            voice=voice,
+            speed=speed,
+            language_code=language_code,
+            stability=stability,
+            similarity_boost=similarity_boost,
+            style=style,
+            previous_text=previous_text,
+            next_text=next_text,
+        )
         return JsonResponse(result)
     except FALError as e:
         return JsonResponse({'error': str(e)}, status=502)

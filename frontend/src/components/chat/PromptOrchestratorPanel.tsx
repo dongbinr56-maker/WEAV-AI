@@ -234,7 +234,7 @@ export function PromptOrchestratorPanel({
         </button>
       )}
       <aside
-        className={`fixed top-14 right-0 z-20 h-[calc(100vh-3.5rem)] w-full border-l border-border/65 bg-card/86 backdrop-blur-xl transition-transform duration-200 ease-out ${
+        className={`chat-slide-panel fixed top-14 right-0 z-20 h-[calc(100vh-3.5rem)] w-full border-l border-border/65 bg-card/86 backdrop-blur-xl transition-transform duration-200 ease-out ${
           open ? 'translate-x-0' : 'translate-x-full'
         }`}
         style={{ width: panelWidth }}
@@ -246,7 +246,7 @@ export function PromptOrchestratorPanel({
               setResizing(true);
               resizeStart.current = { x: e.clientX, width: panelWidth };
             }}
-            className="absolute left-0 top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-primary/25"
+            className="chat-slide-panel__resizer absolute left-0 top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-primary/25"
             title="드래그하여 크기 조절"
           />
         )}

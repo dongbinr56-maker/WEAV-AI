@@ -514,13 +514,13 @@ export const generateTopics = async (context: {
     'Each title should make a viewer feel "I need to know what happened / why this matters / what the hidden truth is."',
     'Avoid specific dates and years unless they appear in the provided trend titles, benchmarking context, or user input.',
     'Avoid named public figures unless they appear in the provided trend titles, benchmarking context, or user input.',
-    'If benchmarking context is provided, use it for structure/tone patterns only; do not reuse its specific names, organizations, dates, elections, or wars unless explicitly present in the user input.',
+    'If benchmarking context is provided, you may use its content summary to understand the source topic and viewer angle, but use the listed patterns only for structure/tone. Do not reuse its specific names, organizations, dates, elections, or wars unless explicitly present in the user input.',
     trendTitles.length
       ? 'If trend titles are provided, treat them as real demand signals and you may reuse their proper nouns, but do not fabricate additional details.'
       : '',
   ].join(' ');
   const urlPart = context.urlData && (context.urlData.summary || (context.urlData.patterns?.length ?? 0) > 0)
-    ? `\n\n참고할 벤치마킹:\n요약: ${context.urlData.summary || '(없음)'}\n패턴: ${Array.isArray(context.urlData.patterns) ? context.urlData.patterns.join(', ') : '(없음)'}\n위 패턴/스타일을 반영한 주제를 제안하세요.`
+    ? `\n\n참고할 벤치마킹:\n내용/전개 요약: ${context.urlData.summary || '(없음)'}\n패턴: ${Array.isArray(context.urlData.patterns) ? context.urlData.patterns.join(', ') : '(없음)'}\n위 내용 요약과 패턴/스타일을 함께 반영한 주제를 제안하세요.`
     : '';
   const trendPart = trendTitles.length
     ? `\n\nYouTube demand signals (recent popular titles, KR):\n- ${trendTitles.join('\n- ')}\n이 리스트는 "현재 수요가 높은 소재/키워드" 참고용입니다. 이 범위를 벗어난 실명/연도/선거/전쟁 같은 시간 고정 소재는 새로 만들어내지 마세요.`
@@ -604,6 +604,18 @@ export const analyzeUrlPattern = async (url: string) => {
   return {
     summary: typeof res.summary === 'string' ? res.summary : '메타데이터 기반 분석 결과를 가져오지 못했습니다.',
     patterns: Array.isArray(res.patterns) ? res.patterns : [],
+    content: (res.content && typeof res.content === 'object' && !Array.isArray(res.content))
+      ? {
+          summary: typeof res.content.summary === 'string' ? res.content.summary : '',
+          keyPoints: Array.isArray(res.content.keyPoints) ? res.content.keyPoints.filter(Boolean) : [],
+        }
+      : { summary: '', keyPoints: [] },
+    delivery: (res.delivery && typeof res.delivery === 'object' && !Array.isArray(res.delivery))
+      ? {
+          summary: typeof res.delivery.summary === 'string' ? res.delivery.summary : '',
+          patterns: Array.isArray(res.delivery.patterns) ? res.delivery.patterns.filter(Boolean) : [],
+        }
+      : { summary: '', patterns: [] },
     meta: res.meta || {},
   };
 };
@@ -786,6 +798,57 @@ export const generateMasterPlan = async (context: {
   return { result: text || existingPlan };
 };
 
+function extractStepSectionsFromMasterPlan(masterPlanText: string) {
+  const text = typeof masterPlanText === 'string' ? masterPlanText.trim() : '';
+  if (!text) return null;
+
+  const sectionPatterns = [
+    { key: 'contentType', label: '1\\)\\s*콘텐츠\\s*타입' },
+    { key: 'summary', label: '2\\)\\s*전체\\s*이야기\\s*한\\s*줄\\s*요약' },
+    { key: 'opening', label: '3\\)\\s*오프닝\\s*기획' },
+    { key: 'body', label: '4\\)\\s*본문\\s*구성\\s*설계' },
+    { key: 'climax', label: '5\\)\\s*클라이맥스\\s*/\\s*핵심\\s*메시지' },
+    { key: 'outro', label: '6\\)\\s*아웃트로\\s*설계' },
+  ] as const;
+
+  const normalized = text.replace(/\r\n/g, '\n');
+  const headers = sectionPatterns
+    .map((section) => {
+      const regex = new RegExp(`(^|\\n)${section.label}\\s*`, 'm');
+      const match = regex.exec(normalized);
+      if (!match) return null;
+      return {
+        key: section.key,
+        start: match.index + match[1].length,
+      };
+    })
+    .filter((item): item is { key: typeof sectionPatterns[number]['key']; start: number } => Boolean(item))
+    .sort((a, b) => a.start - b.start);
+
+  if (headers.length < 6) return null;
+
+  const extracted: Record<string, string> = {
+    contentType: '',
+    summary: '',
+    opening: '',
+    body: '',
+    climax: '',
+    outro: '',
+  };
+
+  headers.forEach((header, index) => {
+    const end = index < headers.length - 1 ? headers[index + 1].start : normalized.length;
+    const sectionText = normalized.slice(header.start, end).trim();
+    const cleaned = sectionText
+      .replace(new RegExp(`^${sectionPatterns.find((item) => item.key === header.key)?.label}\\s*`, 'm'), '')
+      .trim();
+    extracted[header.key] = cleaned;
+  });
+
+  const hasAll = Object.values(extracted).every((value) => value.trim().length > 0);
+  return hasAll ? extracted : null;
+}
+
 export const splitMasterPlanToSteps = async (context: {
   topic: string;
   style: string;
@@ -794,6 +857,11 @@ export const splitMasterPlanToSteps = async (context: {
   benchmarkSummary?: string;
   benchmarkPatterns?: string[];
 }) => {
+  const extracted = extractStepSectionsFromMasterPlan(context.masterPlanText);
+  if (extracted) {
+    return extracted;
+  }
+
   const sys = [
     buildStep3EditorialPersona(context.style || 'N/A'),
     'Task:',
@@ -1040,7 +1108,11 @@ export const generateScenePrompt = async (
       domain: 'high-quality image generation prompts for consistent visual style',
       style: styleDesc || referenceStyle,
     }),
-    'You write a single image generation prompt in English.',
+    'You write a single production-ready image generation prompt in English for fal-ai/nano-banana-2 or fal-ai/nano-banana-2/edit.',
+    'The prompt must describe one final image only, not a collage or storyboard.',
+    'Be direct and constraint-driven: subject, action, environment, camera framing, lens feel, lighting, mood, color energy, and what must stay consistent.',
+    'When reference style is provided, preserve that rendering language and mood rather than inventing a new one.',
+    'Explicitly avoid text, subtitles, logos, UI, watermarks, arrows, and template graphics.',
     'Reply with plain text only (English), no JSON.',
   ].join(' ');
   const benchSummary = typeof benchmark?.summary === 'string' ? benchmark?.summary.trim() : '';
@@ -1048,7 +1120,16 @@ export const generateScenePrompt = async (
   const benchPart = benchSummary || benchPatterns.length
     ? ` Benchmarking vibe: summary="${benchSummary || 'N/A'}"; patterns="${benchPatterns.length ? benchPatterns.join(' | ') : 'N/A'}". Reflect the vibe/patterns without copying verbatim.`
     : '';
-  const prompt = `Narrative: ${narrative}. Style: ${styleDesc}. Reference: ${referenceStyle}.${benchPart} Write one detailed image prompt.`;
+  const prompt = [
+    `Narrative: ${narrative}.`,
+    `Style target: ${styleDesc || 'N/A'}.`,
+    `Reference style and mood: ${referenceStyle || 'N/A'}.`,
+    benchPart ? benchPart.trim() : '',
+    'Write one English prompt optimized for Nano Banana 2.',
+    'It should produce one polished final frame with a clear focal subject, readable silhouette, deliberate composition, and clean cinematic lighting.',
+    'Include camera/framing language and preserve reference style consistency.',
+    'Do not output bullets, numbering, markdown, JSON, or multiple prompt variants.',
+  ].filter(Boolean).join(' ');
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
     return (output || '').trim() || `Cinematic frame, ${styleDesc}. ${referenceStyle}. Scene: ${narrative}`;
@@ -1062,22 +1143,76 @@ export const generateScenePrompt = async (
  */
 const NO_TEXT_PROMPT_SUFFIX = ', no text, no letters, no words in the image';
 
+function shouldUseImageWebSearch(text: string): boolean {
+  const s = (text || '').toLowerCase();
+  if (!s) return false;
+  return /(속보|최신|실시간|사망|암살|공습|전쟁|휴전|대선|총선|대통령|총리|지도자|정권|외교|관세|제재|trump|iran|israel|hamas|ukraine|putin|election|war|ceasefire|president|leader|sanction)/i.test(s);
+}
+
+function buildNanoBananaSingleImagePrompt(
+  basePrompt: string,
+  options?: {
+    aspectRatio?: '9:16' | '16:9';
+    withReferences?: boolean;
+    preserveReferenceMood?: boolean;
+    useCase?: 'scene' | 'thumbnail';
+  }
+) {
+  const aspectText = options?.aspectRatio === '9:16' ? 'vertical 9:16 frame' : 'horizontal 16:9 frame';
+  const useCase = options?.useCase || 'scene';
+  const referenceLine = options?.withReferences
+    ? 'Use the provided reference images as hard constraints. Preserve the same character identity, outfit logic, material feel, silhouette, rendering language, lighting family, and color energy unless the prompt explicitly asks for a change.'
+    : 'Keep one coherent visual language and one dominant focal subject. Do not drift into mixed styles.';
+  const moodLine = options?.preserveReferenceMood
+    ? 'Preserve the benchmark/reference mood, packaging energy, contrast strategy, and focal hierarchy while rebuilding the content for the new request.'
+    : '';
+  const useCaseLine = useCase === 'thumbnail'
+    ? 'This must read like one strong clickable thumbnail: one dominant focal point, simplified hierarchy, bold contrast, clean subject separation, and optional headline space without rendering any text.'
+    : 'This must read like one finished cinematic frame, not a draft sheet or storyboard.';
+  return [
+    (basePrompt || '').trim(),
+    `Create one single finished ${useCase === 'thumbnail' ? 'thumbnail image' : 'image'} only, composed specifically for a ${aspectText}.`,
+    useCaseLine,
+    'Do not create a collage, split screen, storyboard, multi-panel layout, before/after, or contact sheet unless explicitly requested.',
+    'Prioritize clear composition, readable silhouette separation, clean depth, strong local contrast, and one obvious focal hierarchy.',
+    referenceLine,
+    moodLine,
+    'Do not add text, captions, subtitles, letters, words, logos, watermarks, arrows, guide marks, panel borders, badges, or UI elements.',
+  ].filter(Boolean).join(' ');
+}
+
 export const generateSceneImage = async (
   prompt: string,
   style: string,
   aspectRatio: '9:16' | '16:9',
   model?: string,
-  referenceImageUrl?: string
+  referenceImageUrls?: string[]
 ): Promise<string> => {
-  const falModel = model || 'fal-ai/imagen4/preview';
-  const promptWithNoText = (prompt || '').trim() + NO_TEXT_PROMPT_SUFFIX;
+  const cleanReferenceImageUrls = Array.isArray(referenceImageUrls)
+    ? referenceImageUrls.filter((url): url is string => typeof url === 'string' && url.trim().length > 0).slice(0, 10)
+    : [];
+  const falModel = cleanReferenceImageUrls.length > 0 ? 'fal-ai/nano-banana-2/edit' : (model || 'fal-ai/imagen4/preview');
+  const promptWithNoText = buildNanoBananaSingleImagePrompt(
+    `${(prompt || '').trim()}${cleanReferenceImageUrls.length > 0 ? ' Keep the same character identity and preserve the uploaded reference mood while changing only the scene-specific pose, framing, and environment needed for this beat.' : ''}${NO_TEXT_PROMPT_SUFFIX}`,
+    {
+      aspectRatio,
+      withReferences: cleanReferenceImageUrls.length > 0,
+      preserveReferenceMood: cleanReferenceImageUrls.length > 0,
+      useCase: 'scene',
+    }
+  );
   try {
     const { images } = await studioImage({
       prompt: promptWithNoText,
       model: falModel,
       aspect_ratio: aspectRatio,
       num_images: 1,
-      ...(referenceImageUrl ? { reference_image_url: referenceImageUrl } : {}),
+      limit_generations: true,
+      enable_web_search: shouldUseImageWebSearch(promptWithNoText),
+      ...(cleanReferenceImageUrls.length > 0 ? {
+        reference_image_url: cleanReferenceImageUrls[0],
+        image_urls: cleanReferenceImageUrls,
+      } : {}),
     });
     const url = images?.[0]?.url;
     if (url) return url;
@@ -1158,16 +1293,25 @@ export const generateBenchmarkThumbnail = async (
   }
   try {
     const { images } = await studioImage({
-      prompt: [
-        'Create a NEW YouTube thumbnail by benchmarking the provided reference thumbnail image.',
-        normalizedTopic ? `The new thumbnail must be about this topic: ${normalizedTopic}.` : 'Create a strong, clickable benchmarked thumbnail.',
-        `Thumbnail benchmark summary: ${analysisSummary}.`,
-        'Use the reference thumbnail only as a packaging benchmark for composition, crop, color energy, focal hierarchy, emotional intensity, and click-through structure.',
-        'Do NOT copy the original thumbnail literally.',
-        'Do NOT keep the original subject, original face, original text, or original branding unless it naturally matches the requested topic.',
-        'Rebuild the thumbnail so it fits the new topic while preserving the same level of visual punch and benchmarked packaging quality.',
-        `Final output must be composed for a ${aspectRatio} thumbnail canvas.`,
-      ].join(' '),
+      prompt: buildNanoBananaSingleImagePrompt(
+        [
+          'Create a NEW YouTube thumbnail by benchmarking the provided reference thumbnail image.',
+          normalizedTopic ? `The new thumbnail must be about this topic: ${normalizedTopic}.` : 'Create a strong, clickable benchmarked thumbnail.',
+          `Thumbnail benchmark summary: ${analysisSummary}.`,
+          'Use the reference thumbnail only as a packaging benchmark for composition, crop, color energy, focal hierarchy, emotional intensity, and click-through structure.',
+          'Preserve the benchmark mood and packaging energy, but rebuild the subject matter for the new topic.',
+          'Do NOT copy the original thumbnail literally.',
+          'Do NOT keep the original subject, original face, original text, original logo, or original branding unless it naturally matches the requested topic.',
+          'Keep one dominant focal subject or symbol, a simplified composition, and aggressive thumbnail readability.',
+          `Final output must be composed for a ${aspectRatio} thumbnail canvas.`,
+        ].join(' '),
+        {
+          aspectRatio,
+          withReferences: true,
+          preserveReferenceMood: true,
+          useCase: 'thumbnail',
+        }
+      ),
       model: 'fal-ai/nano-banana-2/edit',
       aspect_ratio: aspectRatio,
       num_images: 1,
@@ -1175,6 +1319,8 @@ export const generateBenchmarkThumbnail = async (
       image_urls: [referenceThumbnailUrl],
       resolution: '4K',
       output_format: 'png',
+      limit_generations: true,
+      enable_web_search: shouldUseImageWebSearch(normalizedTopic),
     });
     const url = images?.[0]?.url;
     if (url) return { imageUrl: url, analysisSummary };

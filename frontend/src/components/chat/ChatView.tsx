@@ -53,6 +53,7 @@ export function ChatView() {
   const [modelGuidePanelWidth, setModelGuidePanelWidth] = useState(GUIDE_PANEL_WIDTH);
   const [orchestratorPanelOpen, setOrchestratorPanelOpen] = useState(false);
   const [orchestratorPanelWidth, setOrchestratorPanelWidth] = useState(ORCHESTRATOR_PANEL_WIDTH);
+  const [isMobileViewport, setIsMobileViewport] = useState(() => window.innerWidth < 1024);
   const messageCount = currentSession?.messages?.length ?? 0;
   const imageRecordCount = currentSession?.image_records?.length ?? 0;
 
@@ -101,6 +102,14 @@ export function ChatView() {
   }, [currentSession?.id, currentSession?.kind, refreshDocuments]);
 
   useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 1023px)');
+    const syncViewport = () => setIsMobileViewport(mediaQuery.matches);
+    syncViewport();
+    mediaQuery.addEventListener('change', syncViewport);
+    return () => mediaQuery.removeEventListener('change', syncViewport);
+  }, []);
+
+  useEffect(() => {
     if (!currentSession || currentSession.kind !== 'chat') return;
     if (activeCitations && activeCitations.length > 0) return;
     const docs = getDocuments(currentSession.id);
@@ -146,8 +155,8 @@ export function ChatView() {
   })();
 
   const rightOffset = isChat && !showImageContent
-    ? (docPanelOpen ? docPanelWidth : orchestratorPanelOpen ? orchestratorPanelWidth : 0)
-    : (modelGuidePanelOpen ? modelGuidePanelWidth : 0);
+    ? (isMobileViewport ? 0 : (docPanelOpen ? docPanelWidth : orchestratorPanelOpen ? orchestratorPanelWidth : 0))
+    : (isMobileViewport ? 0 : (modelGuidePanelOpen ? modelGuidePanelWidth : 0));
   const panelsOpen = docPanelOpen || orchestratorPanelOpen || modelGuidePanelOpen;
   // Keep the latest message fully visible above the fixed composer (blur overlay).
   const bottomPad = Math.max(440, inputAreaHeight + 260);
@@ -435,6 +444,18 @@ export function ChatView() {
         onHeightChange={setInputAreaHeight}
         onSubmitStart={() => scrollToLatest('smooth')}
       />
+      {isMobileViewport && panelsOpen && (
+        <button
+          type="button"
+          aria-label="열린 패널 닫기"
+          onClick={() => {
+            setDocPanelOpen(false);
+            setOrchestratorPanelOpen(false);
+            setModelGuidePanelOpen(false);
+          }}
+          className="fixed inset-0 top-14 z-10 bg-background/55 backdrop-blur-[2px] lg:hidden"
+        />
+      )}
       {isChat && !showImageContent && currentSession && (
         <DocumentPanel
           open={docPanelOpen}
