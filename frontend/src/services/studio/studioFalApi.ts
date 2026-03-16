@@ -234,6 +234,13 @@ export type StudioThumbnailBenchmarkResponse = {
   job_id: number;
 };
 
+export type StudioThumbnailBenchmarkCandidate = {
+  id: string;
+  title: string;
+  image_url: string;
+  ctr_hint: string;
+};
+
 export type StudioThumbnailBenchmarkJobStatus = {
   task_id: string;
   job_id: number;
@@ -241,6 +248,7 @@ export type StudioThumbnailBenchmarkJobStatus = {
   status: 'pending' | 'running' | 'success' | 'failure';
   result: {
     image_url?: string;
+    images?: StudioThumbnailBenchmarkCandidate[];
     analysis_summary?: string;
     meta?: {
       aspect_ratio?: string;
@@ -260,9 +268,11 @@ export async function studioExportJobCancel(taskId: string): Promise<{ status: s
 }
 
 export async function studioThumbnailBenchmark(options: {
+  session_id: number;
   reference_thumbnail_url: string;
   target_topic: string;
   aspect_ratio: '9:16' | '16:9';
+  num_candidates?: number;
 }): Promise<StudioThumbnailBenchmarkResponse> {
   return api.post<StudioThumbnailBenchmarkResponse>(STUDIO_THUMBNAIL_BENCHMARK, options);
 }

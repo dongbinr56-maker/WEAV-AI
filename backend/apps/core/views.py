@@ -1626,16 +1626,30 @@ def studio_export_job_cancel(request, task_id: str):
 def studio_thumbnail_benchmark(request):
     """
     Studio Step 9 async thumbnail benchmark.
-    POST JSON: { reference_thumbnail_url, target_topic, aspect_ratio }
+    POST JSON: { session_id, reference_thumbnail_url, target_topic, aspect_ratio, num_candidates? }
     -> { task_id, job_id }
     """
     if (r := _check_ratelimit(request)):
         return r
     body = _parse_json_body(request)
+    session_id = body.get('session_id')
+    if not isinstance(session_id, int):
+        try:
+            session_id = int(session_id)
+        except Exception:
+            session_id = None
     reference_thumbnail_url = (body.get('reference_thumbnail_url') or '').strip() if isinstance(body.get('reference_thumbnail_url'), str) else ''
     target_topic = (body.get('target_topic') or '').strip() if isinstance(body.get('target_topic'), str) else ''
     aspect_ratio = (body.get('aspect_ratio') or '16:9').strip()
+    num_candidates = body.get('num_candidates', 3)
+    try:
+        num_candidates = int(num_candidates)
+    except Exception:
+        num_candidates = 3
+    num_candidates = max(1, min(4, num_candidates))
 
+    if not session_id:
+        return JsonResponse({'error': 'session_id (number) required'}, status=400)
     if not reference_thumbnail_url:
         return JsonResponse({'error': 'reference_thumbnail_url required'}, status=400)
     if not target_topic:
@@ -1649,9 +1663,12 @@ def studio_thumbnail_benchmark(request):
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=503)
 
-    session = Session.objects.filter(kind=SESSION_KIND_STUDIO).order_by('-updated_at').first()
-    if not session:
-        session = Session.objects.create(kind=SESSION_KIND_STUDIO, title='WEAV Studio')
+    try:
+        session = Session.objects.get(pk=session_id)
+    except Session.DoesNotExist:
+        return JsonResponse({'error': 'session not found'}, status=404)
+    if session.kind != SESSION_KIND_STUDIO:
+        return JsonResponse({'error': 'not a studio session'}, status=400)
 
     job = Job.objects.create(session=session, kind='studio_thumb_bench', status='pending', result={})
     task = task_studio_thumbnail_benchmark.delay(
@@ -1659,6 +1676,7 @@ def studio_thumbnail_benchmark(request):
         reference_thumbnail_url=reference_thumbnail_url,
         target_topic=target_topic,
         aspect_ratio=aspect_ratio,
+        num_candidates=num_candidates,
     )
     job.task_id = task.id
     job.save(update_fields=['task_id', 'updated_at'])

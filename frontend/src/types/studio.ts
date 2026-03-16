@@ -117,12 +117,22 @@ export interface StudioExportJobState {
   resultVttUrl: string | null;
 }
 
+export interface StudioThumbnailCandidate {
+  id: string;
+  title: string;
+  imagePlaceholder?: string;
+  imageUrl?: string;
+  ctrHint: string;
+  isSelected: boolean;
+}
+
 export interface StudioThumbnailBenchmarkJobState {
   taskId: string | null;
   status: 'idle' | 'pending' | 'running' | 'success' | 'failure';
   error: string | null;
   resultImageUrl: string | null;
   resultAnalysisSummary: string | null;
+  resultCandidates: StudioThumbnailCandidate[];
 }
 
 export interface StudioGlobalContextType {
@@ -234,12 +244,12 @@ export interface StudioGlobalContextType {
 
   // Step 9 썸네일
   thumbnailData: {
-    thumbnails: Array<{ id: string; title: string; imagePlaceholder?: string; imageUrl?: string; ctrHint: string; isSelected: boolean }>;
+    thumbnails: StudioThumbnailCandidate[];
     ytUrlInput: string;
     ytThumbnailUrl: string | null;
   };
   setThumbnailData: React.Dispatch<React.SetStateAction<{
-    thumbnails: Array<{ id: string; title: string; imagePlaceholder?: string; imageUrl?: string; ctrHint: string; isSelected: boolean }>;
+    thumbnails: StudioThumbnailCandidate[];
     ytUrlInput: string;
     ytThumbnailUrl: string | null;
   }>>;

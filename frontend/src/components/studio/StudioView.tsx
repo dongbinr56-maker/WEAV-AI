@@ -21,6 +21,7 @@ import {
 	type StudioVisualReferenceAsset,
 	type StudioExportJobState,
 	type StudioThumbnailBenchmarkJobState,
+  type StudioThumbnailCandidate,
 	  type StudioReferenceMode,
 	  type StudioReferenceState,
 	  type StudioReferenceView,
@@ -66,6 +67,46 @@ function normalizeStoredTopicSuggestions(raw: unknown): StudioTopicSuggestion[] 
       return null;
     })
     .filter((item): item is StudioTopicSuggestion => Boolean(item));
+}
+
+function normalizeThumbnailCandidates(raw: unknown): StudioThumbnailCandidate[] {
+  if (!Array.isArray(raw)) return [];
+  const normalized: Array<StudioThumbnailCandidate | null> = raw
+    .map((item, index): StudioThumbnailCandidate | null => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      const obj = item as Record<string, unknown>;
+      const id = typeof obj.id === 'string' && obj.id.trim() ? obj.id.trim() : `thumb-${index + 1}`;
+      const title = typeof obj.title === 'string' && obj.title.trim() ? obj.title.trim() : `썸네일 후보 ${index + 1}`;
+      const imagePlaceholder = typeof obj.imagePlaceholder === 'string' && obj.imagePlaceholder.trim() ? obj.imagePlaceholder.trim() : undefined;
+      const imageUrl = typeof obj.imageUrl === 'string' && obj.imageUrl.trim() ? obj.imageUrl.trim() : undefined;
+      const ctrHint = typeof obj.ctrHint === 'string' && obj.ctrHint.trim() ? obj.ctrHint.trim() : '생성된 후보';
+      const isSelected = obj.isSelected === true;
+      if (!imageUrl && !imagePlaceholder) return null;
+      return { id, title, imagePlaceholder, imageUrl, ctrHint, isSelected };
+    });
+  const filtered = normalized.filter((item): item is StudioThumbnailCandidate => item !== null);
+
+  if (filtered.length === 0) return [];
+  if (filtered.some((item) => item.isSelected)) return filtered;
+  return filtered.map((item, index) => ({ ...item, isSelected: index === 0 }));
+}
+
+function buildSceneNarrativeSignature(scenes: StudioScene[]) {
+  return scenes
+    .map((scene) => `${scene.id}:${(scene.narrative || '').trim()}`)
+    .join('||');
+}
+
+function buildSceneRenderSignature(scenes: StudioScene[]) {
+  return scenes
+    .map((scene) => [
+      scene.id,
+      (scene.narrative || '').trim(),
+      (scene.imageUrl || '').trim(),
+      (scene.audioUrl || '').trim(),
+      scene.durationSec || scene.audioDurationSec || scene.duration || 0,
+    ].join(':'))
+    .join('||');
 }
 
 function getBenchmarkContentSummary(urlAnalysisData: any): string {
@@ -172,6 +213,7 @@ const createDefaultThumbnailBenchmarkJobState = (): StudioThumbnailBenchmarkJobS
   error: null,
   resultImageUrl: null,
   resultAnalysisSummary: null,
+  resultCandidates: [],
 });
 
 	const GlobalProvider: React.FC<{ children: React.ReactNode; sessionId?: number }> = ({ children, sessionId }) => {
@@ -297,6 +339,7 @@ const createDefaultThumbnailBenchmarkJobState = (): StudioThumbnailBenchmarkJobS
 	      error: typeof obj.error === 'string' && obj.error.trim() ? obj.error : null,
 	      resultImageUrl: typeof obj.resultImageUrl === 'string' && obj.resultImageUrl.trim() ? obj.resultImageUrl : null,
 	      resultAnalysisSummary: typeof obj.resultAnalysisSummary === 'string' && obj.resultAnalysisSummary.trim() ? obj.resultAnalysisSummary : null,
+        resultCandidates: normalizeThumbnailCandidates(obj.resultCandidates),
 	    };
 	  });
 	  const [metaTitle, setMetaTitle] = useState(() => (typeof stored?.metaTitle === 'string') ? stored.metaTitle : '');
@@ -306,7 +349,7 @@ const createDefaultThumbnailBenchmarkJobState = (): StudioThumbnailBenchmarkJobS
 	    const def = createDefaultThumbnailData();
 	    if (stored?.thumbnailData && typeof stored.thumbnailData === 'object' && !Array.isArray(stored.thumbnailData)) {
 	      const t = stored.thumbnailData as Record<string, unknown>;
-	      const thumbs = Array.isArray(t.thumbnails) ? (t.thumbnails as any[]) : def.thumbnails;
+	      const thumbs = normalizeThumbnailCandidates(t.thumbnails);
 	      return {
 	        thumbnails: thumbs,
 	        ytUrlInput: typeof t.ytUrlInput === 'string' ? (t.ytUrlInput as string) : def.ytUrlInput,
@@ -432,6 +475,15 @@ const createDefaultThumbnailBenchmarkJobState = (): StudioThumbnailBenchmarkJobS
             error: status.status === 'failure' ? (status.error || '썸네일 벤치마킹 실패') : null,
             resultImageUrl: status.result?.image_url || prev.resultImageUrl,
             resultAnalysisSummary: status.result?.analysis_summary || prev.resultAnalysisSummary,
+            resultCandidates: normalizeThumbnailCandidates(
+              (status.result?.images || []).map((item) => ({
+                id: item.id,
+                title: item.title,
+                imageUrl: item.image_url,
+                ctrHint: item.ctr_hint,
+                isSelected: false,
+              }))
+            ),
           };
         });
       } catch (error) {
@@ -452,26 +504,93 @@ const createDefaultThumbnailBenchmarkJobState = (): StudioThumbnailBenchmarkJobS
   }, [thumbnailBenchmarkJob.taskId, thumbnailBenchmarkJob.status]);
 
   useEffect(() => {
-    if (thumbnailBenchmarkJob.status !== 'success' || !thumbnailBenchmarkJob.taskId || !thumbnailBenchmarkJob.resultImageUrl) return;
-    const nextId = `bench-${thumbnailBenchmarkJob.taskId}`;
-    setThumbnailData((prev) => {
-      const base = (prev.thumbnails?.length ?? 0) > 0 ? prev.thumbnails : MOCK_THUMBNAILS;
-      const existingIndex = base.findIndex((item: any) => item?.id === nextId);
-      const nextThumb = {
-        id: nextId,
-        title: '벤치마킹 썸네일',
-        imageUrl: thumbnailBenchmarkJob.resultImageUrl || undefined,
-        ctrHint: '레퍼런스 분석 기반 생성',
-        isSelected: existingIndex === -1,
-      };
-      if (existingIndex >= 0) {
-        const updated = [...base];
-        updated[existingIndex] = { ...updated[existingIndex], ...nextThumb };
-        return { ...prev, thumbnails: updated };
+    if (thumbnailBenchmarkJob.status !== 'success') return;
+    const candidates = normalizeThumbnailCandidates(thumbnailBenchmarkJob.resultCandidates);
+    if (candidates.length === 0) return;
+    setThumbnailData((prev) => ({ ...prev, thumbnails: candidates }));
+  }, [thumbnailBenchmarkJob.status, thumbnailBenchmarkJob.resultCandidates, setThumbnailData]);
+
+  const resetThumbnailArtifacts = useCallback(() => {
+    setThumbnailBenchmarkJob(createDefaultThumbnailBenchmarkJobState());
+    setThumbnailData((prev) => ({ ...prev, thumbnails: [] }));
+  }, [setThumbnailBenchmarkJob, setThumbnailData]);
+
+  const narrativeSignature = useMemo(() => buildSceneNarrativeSignature(scenes), [scenes]);
+  const renderSignature = useMemo(() => buildSceneRenderSignature(scenes), [scenes]);
+  const metaSignature = useMemo(
+    () => JSON.stringify({
+      finalTopic: (finalTopic || '').trim(),
+      selectedTopic: (selectedTopic || '').trim(),
+      summary: (planningData?.summary || '').trim(),
+      targetDuration: (planningData?.targetDuration || '').trim(),
+      masterScript: (masterScript || '').trim(),
+    }),
+    [finalTopic, selectedTopic, planningData?.summary, planningData?.targetDuration, masterScript]
+  );
+  const thumbnailDependencySignature = useMemo(
+    () => JSON.stringify({
+      topic: (finalTopic || selectedTopic || '').trim(),
+      videoFormat,
+    }),
+    [finalTopic, selectedTopic, videoFormat]
+  );
+
+  const prevNarrativeSignatureRef = useRef(narrativeSignature);
+  const prevRenderSignatureRef = useRef(renderSignature);
+  const prevMetaSignatureRef = useRef(metaSignature);
+  const prevThumbnailSignatureRef = useRef(thumbnailDependencySignature);
+
+  useEffect(() => {
+    const previous = prevNarrativeSignatureRef.current;
+    if (previous && previous !== narrativeSignature) {
+      setScenes((prev) => {
+        const hasAnyAudio = prev.some((scene) => !!scene.audioUrl);
+        if (!hasAnyAudio) return prev;
+        return prev.map((scene) => ({
+          ...scene,
+          audioUrl: '',
+          durationSec: undefined,
+          audioDurationSec: undefined,
+        }));
+      });
+      setSceneDurations([]);
+      setExportJob(createDefaultExportJobState());
+      setVideoUrl(null);
+    }
+    prevNarrativeSignatureRef.current = narrativeSignature;
+  }, [narrativeSignature, setExportJob, setSceneDurations, setScenes, setVideoUrl]);
+
+  useEffect(() => {
+    const previous = prevRenderSignatureRef.current;
+    if (previous && previous !== renderSignature) {
+      setExportJob((prev) => {
+        if (!prev.taskId && !prev.resultVideoUrl && prev.status === 'idle') return prev;
+        return createDefaultExportJobState();
+      });
+      setVideoUrl((prev) => (prev ? null : prev));
+    }
+    prevRenderSignatureRef.current = renderSignature;
+  }, [renderSignature, setExportJob, setVideoUrl]);
+
+  useEffect(() => {
+    const previous = prevMetaSignatureRef.current;
+    if (previous && previous !== metaSignature) {
+      if (metaTitle || metaDescription || metaPinnedComment) {
+        setMetaTitle('');
+        setMetaDescription('');
+        setMetaPinnedComment('');
       }
-      return { ...prev, thumbnails: [...base, nextThumb] };
-    });
-  }, [thumbnailBenchmarkJob.status, thumbnailBenchmarkJob.taskId, thumbnailBenchmarkJob.resultImageUrl, setThumbnailData]);
+    }
+    prevMetaSignatureRef.current = metaSignature;
+  }, [metaDescription, metaPinnedComment, metaSignature, metaTitle, setMetaDescription, setMetaPinnedComment, setMetaTitle]);
+
+  useEffect(() => {
+    const previous = prevThumbnailSignatureRef.current;
+    if (previous && previous !== thumbnailDependencySignature) {
+      resetThumbnailArtifacts();
+    }
+    prevThumbnailSignatureRef.current = thumbnailDependencySignature;
+  }, [thumbnailDependencySignature, resetThumbnailArtifacts]);
 
   const resetStudioProject = useCallback(() => {
     try {
@@ -4064,7 +4183,7 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 // --- [Step 5: 이미지 및 대본 생성] ---
 const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const { 
-    masterScript, scenes, setScenes, selectedStyle, setSelectedStyle, videoFormat,
+    masterScript, planningData, scenes, setScenes, selectedStyle, setSelectedStyle, videoFormat,
     referenceImageUrl,
     useVisualReferencesInSceneGeneration,
     visualReferenceAssets,
@@ -4209,7 +4328,7 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
     setIsSplitting(true);
     try {
       setScenes([]);
-      const splitRes = await splitScriptIntoScenes(masterScript);
+      const splitRes = await splitScriptIntoScenes(masterScript, { targetDuration: planningData?.targetDuration });
       const mapped = splitRes
         .map((s: any, i: number) => ({
         id: Date.now() + i,
@@ -4600,21 +4719,6 @@ type VoiceSegment = {
   status: 'pending' | 'done';
   audioUrl?: string;
 };
-
-type ThumbnailCandidate = {
-  id: string;
-  title: string;
-  imagePlaceholder?: string;
-  imageUrl?: string;
-  ctrHint: string;
-  isSelected: boolean;
-};
-
-const MOCK_THUMBNAILS: ThumbnailCandidate[] = [
-  { id: 't1', title: '메인 (이미지 강조)', imagePlaceholder: '썸네일 A', ctrHint: '클릭률 예상 +12%', isSelected: true },
-  { id: 't2', title: '대안 (텍스트 강조)', imagePlaceholder: '썸네일 B', ctrHint: '클릭률 예상 +8%', isSelected: false },
-  { id: 't3', title: '감성 톤', imagePlaceholder: '썸네일 C', ctrHint: '클릭률 예상 +5%', isSelected: false },
-];
 
 function getYoutubeVideoId(url: string): string | null {
   const trimmed = url.trim();
@@ -5517,8 +5621,8 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
 // --- [Step 9: 썸네일 연구소] ---
 const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
-  const { thumbnailData, setThumbnailData, setCurrentStep, videoFormat, selectedTopic, finalTopic, thumbnailBenchmarkJob, setThumbnailBenchmarkJob } = useGlobal();
-  const thumbnails = (thumbnailData.thumbnails?.length ?? 0) > 0 ? (thumbnailData.thumbnails as ThumbnailCandidate[]) : MOCK_THUMBNAILS;
+  const { sessionId, thumbnailData, setThumbnailData, setCurrentStep, videoFormat, selectedTopic, finalTopic, thumbnailBenchmarkJob, setThumbnailBenchmarkJob } = useGlobal();
+  const thumbnails = thumbnailData.thumbnails || [];
   const ytUrlInput = thumbnailData.ytUrlInput || '';
   const ytThumbnailUrl = thumbnailData.ytThumbnailUrl;
   const [ytThumbnailError, setYtThumbnailError] = useState(false);
@@ -5556,12 +5660,20 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
       error: null,
       resultImageUrl: null,
       resultAnalysisSummary: null,
+      resultCandidates: [],
     });
     try {
+      if (!sessionId) {
+        showToast('세션 ID가 없습니다. Studio 프로젝트를 새로 만든 뒤 다시 시도해주세요.');
+        setThumbnailBenchmarkJob(createDefaultThumbnailBenchmarkJobState());
+        return;
+      }
       const started = await studioThumbnailBenchmark({
+        session_id: sessionId,
         reference_thumbnail_url: ytThumbnailUrl,
         target_topic: topicForThumbnail,
         aspect_ratio: videoFormat === '9:16' ? '9:16' : '16:9',
+        num_candidates: 3,
       });
       setThumbnailBenchmarkJob({
         taskId: started.task_id,
@@ -5569,6 +5681,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         error: null,
         resultImageUrl: null,
         resultAnalysisSummary: null,
+        resultCandidates: [],
       });
       showToast('벤치마킹 작업을 시작했습니다. 다른 스텝으로 이동해도 계속 진행됩니다.');
     } catch (e) {
@@ -5578,6 +5691,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         error: e instanceof Error ? e.message : '벤치마킹 생성 실패',
         resultImageUrl: null,
         resultAnalysisSummary: null,
+        resultCandidates: [],
       });
       showToast('벤치마킹 생성에 실패했습니다.');
     }
@@ -5585,8 +5699,8 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
   const selectThumb = (id: string) => {
     setThumbnailData(prev => {
-      const base = (prev.thumbnails?.length ?? 0) > 0 ? prev.thumbnails : MOCK_THUMBNAILS;
-      return { ...prev, thumbnails: base.map((t: ThumbnailCandidate) => ({ ...t, isSelected: t.id === id })) };
+      const base = prev.thumbnails || [];
+      return { ...prev, thumbnails: base.map((t: StudioThumbnailCandidate) => ({ ...t, isSelected: t.id === id })) };
     });
   };
 
@@ -5709,7 +5823,7 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
           </button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {thumbnails.map(t => (
+          {thumbnails.length > 0 ? thumbnails.map(t => (
             <button
               key={t.id}
               type="button"
@@ -5728,7 +5842,11 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
                 <p className="text-xs text-primary">{t.ctrHint}</p>
               </div>
             </button>
-          ))}
+          )) : (
+            <div className="sm:col-span-2 lg:col-span-3 rounded-2xl border border-dashed border-border/70 bg-secondary/20 p-8 text-center text-sm text-slate-500">
+              썸네일 후보가 아직 없습니다. 벤치마킹을 실행하면 실제 생성된 후보 3개가 여기에 표시됩니다.
+            </div>
+          )}
         </div>
       </div>
 
@@ -5759,8 +5877,8 @@ const PreviewStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const { videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData, setCurrentStep, videoFormat } = useGlobal();
   const [isDownloading, setIsDownloading] = useState(false);
 
-  const thumbnails = (thumbnailData?.thumbnails?.length ?? 0) > 0 ? thumbnailData.thumbnails as ThumbnailCandidate[] : [];
-  const selectedThumb = thumbnails.find((t: ThumbnailCandidate) => t.isSelected) ?? thumbnails[0];
+  const thumbnails = (thumbnailData?.thumbnails?.length ?? 0) > 0 ? thumbnailData.thumbnails as StudioThumbnailCandidate[] : [];
+  const selectedThumb = thumbnails.find((t: StudioThumbnailCandidate) => t.isSelected) ?? thumbnails[0];
   const thumbImg = selectedThumb?.imageUrl ?? thumbnailData?.ytThumbnailUrl ?? null;
   const previewAspectClass = videoFormat === '9:16' ? 'aspect-[9/16]' : 'aspect-video';
 

@@ -353,6 +353,7 @@ def task_studio_thumbnail_benchmark(
     reference_thumbnail_url: str,
     target_topic: str,
     aspect_ratio: str = "16:9",
+    num_candidates: int = 3,
 ) -> dict[str, Any]:
     job = Job.objects.get(pk=job_id)
     job.status = "running"
@@ -404,18 +405,29 @@ def task_studio_thumbnail_benchmark(
                 "Avoid text, watermark, logo, interface chrome, and guide marks unless the topic absolutely requires title typography.",
             ]
         )
+        requested_candidates = max(1, min(4, int(num_candidates or 3)))
         images = image_generation_fal(
             image_prompt,
             model="fal-ai/nano-banana-2/edit",
             aspect_ratio=aspect_ratio if aspect_ratio in ("9:16", "16:9") else "16:9",
-            num_images=1,
+            num_images=requested_candidates,
             reference_image_url=reference_thumbnail_url,
             image_urls=[reference_thumbnail_url],
             resolution="4K",
             output_format="png",
             limit_generations=True,
         )
-        image_url = (images or [{}])[0].get("url")
+        image_candidates = [
+            {
+                "id": f"bench-{idx + 1}",
+                "title": f"벤치마킹 후보 {idx + 1}",
+                "image_url": (item.get("url") or "").strip(),
+                "ctr_hint": "레퍼런스 분석 기반 생성",
+            }
+            for idx, item in enumerate(images or [])
+            if isinstance(item, dict) and (item.get("url") or "").strip()
+        ]
+        image_url = image_candidates[0]["image_url"] if image_candidates else ""
         if not image_url:
             raise RuntimeError("benchmark thumbnail image missing")
 
@@ -423,6 +435,7 @@ def task_studio_thumbnail_benchmark(
         job.error_message = ""
         job.result = {
             "image_url": image_url,
+            "images": image_candidates,
             "analysis_summary": analysis_summary,
             "meta": {
                 "aspect_ratio": aspect_ratio,

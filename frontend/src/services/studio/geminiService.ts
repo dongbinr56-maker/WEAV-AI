@@ -979,6 +979,129 @@ function buildTargetDurationPrompt(targetDuration?: string, length?: string) {
   ].filter(Boolean).join(' ');
 }
 
+function getSceneCountGuide(targetDuration?: string) {
+  const targetSec = targetDurationToSeconds(targetDuration);
+  if (targetSec <= 0) {
+    return { targetSec: 0, desiredScenes: 0, minScenes: 0, maxScenes: 0 };
+  }
+
+  const desiredScenes = Math.max(4, Math.min(18, Math.round(targetSec / 45)));
+  const variance = Math.max(1, Math.round(desiredScenes * 0.2));
+  return {
+    targetSec,
+    desiredScenes,
+    minScenes: Math.max(4, desiredScenes - variance),
+    maxScenes: Math.min(24, desiredScenes + variance),
+  };
+}
+
+function splitNarrationIntoSentenceChunks(raw: string): string[] {
+  const normalized = (raw || '')
+    .replace(/\r/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
+  if (!normalized) return [];
+
+  const paragraphs = normalized
+    .split(/\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const compact = normalized.replace(/\s+/g, ' ').trim();
+  const seeds = paragraphs.length > 1 ? paragraphs : compact.split(/(?<=[.!?…。！？])\s+/);
+  const chunks = seeds
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (chunks.length > 1) return chunks;
+
+  const clauses = compact.split(/,\s+|;\s+|:\s+/).map((part) => part.trim()).filter(Boolean);
+  if (clauses.length > 1) return clauses;
+
+  const fallbackChunks: string[] = [];
+  const maxLen = 180;
+  let rest = compact;
+  while (rest.length > maxLen) {
+    let cut = rest.lastIndexOf(' ', maxLen);
+    if (cut < maxLen * 0.45) cut = maxLen;
+    fallbackChunks.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) fallbackChunks.push(rest);
+  return fallbackChunks.filter(Boolean);
+}
+
+function splitSceneItem(
+  item: { script_segment: string; scene_description: string },
+  parts = 2
+): Array<{ script_segment: string; scene_description: string }> {
+  const chunks = splitNarrationIntoSentenceChunks(item.script_segment);
+  if (chunks.length <= 1) return [item];
+
+  const boundedParts = Math.max(2, Math.min(parts, chunks.length));
+  const targetSize = Math.ceil(chunks.length / boundedParts);
+  const next: Array<{ script_segment: string; scene_description: string }> = [];
+  for (let i = 0; i < chunks.length; i += targetSize) {
+    const segment = chunks.slice(i, i + targetSize).join(' ').trim();
+    if (!segment) continue;
+    const beat = next.length + 1;
+    next.push({
+      script_segment: segment,
+      scene_description: `${item.scene_description} Follow-up beat ${beat} with a distinct camera framing while preserving continuity.`,
+    });
+  }
+  return next.length > 1 ? next : [item];
+}
+
+function rebalanceSceneItems(
+  items: Array<{ script_segment: string; scene_description: string }>,
+  guide: { minScenes: number; maxScenes: number; desiredScenes: number }
+) {
+  let next = [...items];
+
+  while (next.length < guide.minScenes) {
+    let splitIndex = -1;
+    let splitChunks: Array<{ script_segment: string; scene_description: string }> | null = null;
+
+    for (let i = 0; i < next.length; i += 1) {
+      const candidate = splitSceneItem(next[i], 2);
+      if (candidate.length > 1) {
+        const currentLen = next[i].script_segment.length;
+        const bestLen = splitIndex >= 0 ? next[splitIndex].script_segment.length : -1;
+        if (currentLen > bestLen) {
+          splitIndex = i;
+          splitChunks = candidate;
+        }
+      }
+    }
+
+    if (splitIndex < 0 || !splitChunks) break;
+    next = [
+      ...next.slice(0, splitIndex),
+      ...splitChunks,
+      ...next.slice(splitIndex + 1),
+    ];
+  }
+
+  while (next.length > guide.maxScenes && next.length > 1) {
+    const merged: typeof next = [];
+    for (let i = 0; i < next.length; i += 2) {
+      const current = next[i];
+      const following = next[i + 1];
+      if (!following) {
+        merged.push(current);
+        continue;
+      }
+      merged.push({
+        script_segment: `${current.script_segment} ${following.script_segment}`.trim(),
+        scene_description: current.scene_description || following.scene_description,
+      });
+    }
+    next = merged;
+  }
+
+  return next;
+}
+
 async function refineMasterScriptToTargetDuration(options: {
   script: string;
   topic: string;
@@ -1158,7 +1281,8 @@ export function sanitizeScriptSegment(raw: string): string {
   return text || raw.trim();
 }
 
-export const splitScriptIntoScenes = async (fullScript: string) => {
+export const splitScriptIntoScenes = async (fullScript: string, options?: { targetDuration?: string }) => {
+  const guide = getSceneCountGuide(options?.targetDuration);
   const sys = [
     buildStudioPersona({
       role: 'senior video editor and storyboard artist',
@@ -1169,10 +1293,14 @@ export const splitScriptIntoScenes = async (fullScript: string) => {
     '- Put ONLY the spoken narration (내레이션) that will be read aloud. No music cues, no timestamps, no visual directions.',
     '- Do NOT include: "음악: ...", "[0-3초]", "화면: ...", or similar. Those belong in scene_description or nowhere.',
     'scene_description should describe the visual in English (can include timing/mood for the visual).',
+    guide.targetSec
+      ? `Target duration is about ${guide.targetSec} seconds. Aim for roughly ${guide.desiredScenes} scenes, with no fewer than ${guide.minScenes} and no more than ${guide.maxScenes} scenes unless absolutely necessary.`
+      : '',
   ].join('\n');
   const prompt = `Split this script into scene items. Each item:
 - script_segment: ONLY the narration text (what the narrator says). No music, no seconds/timestamps, no "화면:" directions.
 - scene_description: visual prompt for image (can include timing/mood for the visual).
+${guide.targetSec ? `- Aim for about ${guide.desiredScenes} scenes total. Minimum ${guide.minScenes}, maximum ${guide.maxScenes}.` : ''}
 Script:\n${fullScript}\nReturn JSON array only.`;
   try {
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
@@ -1182,16 +1310,19 @@ Script:\n${fullScript}\nReturn JSON array only.`;
         script_segment: sanitizeScriptSegment(p.script_segment ?? ''),
         scene_description: p.scene_description ?? 'Cinematic scene.',
       })).filter((item) => item.script_segment.trim().length > 0);
-      if (cleaned.length > 0) return cleaned;
+      if (cleaned.length > 0) {
+        return guide.targetSec ? rebalanceSceneItems(cleaned, guide) : cleaned;
+      }
     }
   } catch (e) {
     /* fallback */
   }
-  return [
+  const fallback = [
     { script_segment: '오프닝: 시청자의 관심을 끄는 한 문장 훅.', scene_description: 'Minimal studio, neon rim light, close-up.' },
     { script_segment: '본문: 핵심 포인트 1~2를 빠르게 전달.', scene_description: 'Clean desk, soft shadows, cinematic framing.' },
     { script_segment: '마무리: 요약 및 CTA.', scene_description: 'Dark gradient background, subtle light beam.' },
   ];
+  return guide.targetSec ? rebalanceSceneItems(fallback, guide) : fallback;
 };
 
 /**
