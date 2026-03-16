@@ -39,6 +39,42 @@ type ImagePromptProfile = {
 
 type PromptReferenceContext = LocalbananaPromptLibrarySearchResult | null;
 
+type StructuredImagePromptPayload = {
+  format: 'weav-image-prompt/v1';
+  variant: PromptVariant;
+  language: 'en';
+  strategy: 'structured_json_for_clarity';
+  model: {
+    id: string;
+    name: string;
+  };
+  scene: {
+    subject: string;
+    style: string;
+    mood: string;
+    composition: string;
+    environment: string;
+  };
+  constraints: {
+    must_keep: string[];
+    avoid: string[];
+    output_goal: string;
+  };
+  references: {
+    similar_prompt_titles: string[];
+    style_cues: string[];
+    composition_cues: string[];
+    environment_cues: string[];
+    negative_cues: string[];
+  };
+  prompts: {
+    final_prompt: string;
+    negative_prompt: string;
+    model_hint: string;
+    reference_handling: string;
+  };
+};
+
 const VARIANT_LABELS: Record<PromptVariant, string> = {
   short: '짧게',
   precise: '정밀하게',
@@ -47,6 +83,17 @@ const VARIANT_LABELS: Record<PromptVariant, string> = {
 
 function containsKorean(text: string): boolean {
   return /[가-힣]/.test(text);
+}
+
+function toList(value: string): string[] {
+  return value
+    .split(/[,\n|]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toJsonPrompt(payload: StructuredImagePromptPayload): string {
+  return JSON.stringify(payload, null, 2);
 }
 
 function inferImageProfile(
@@ -118,6 +165,9 @@ function getModelPromptHint(modelId: string): string {
   if (modelId === 'fal-ai/nano-banana-pro') {
     return 'Keep identity and reference consistency when a reference image is provided. Prioritize clean subject preservation over unnecessary variation.';
   }
+  if (modelId === 'fal-ai/nano-banana-2') {
+    return 'Favor a clean, direct scene description with explicit subject, composition, lighting, and material cues. Keep the prompt concise but concrete.';
+  }
   if (modelId === 'kling-ai/kling-v1') {
     return 'Prioritize a strong single-image concept with clear subject readability and cinematic clarity.';
   }
@@ -162,8 +212,15 @@ function buildImagePromptBundle(
     ...(negatives ? references?.blockMatches.negative.slice(0, 1).map((item) => item.text) ?? [] : []),
   ].filter(Boolean);
   const topReferenceTitles = references?.topMatches.map((item) => item.title) ?? [];
+  const styleCues = references?.blockMatches.style.slice(0, 2).map((item) => item.text) ?? [];
+  const compositionCues = references?.blockMatches.composition.slice(0, 2).map((item) => item.text) ?? [];
+  const environmentCues = [
+    ...(references?.blockMatches.environment.slice(0, 1).map((item) => item.text) ?? []),
+    ...(references?.blockMatches.lighting.slice(0, 1).map((item) => item.text) ?? []),
+  ].filter(Boolean);
+  const negativeCues = references?.blockMatches.negative.slice(0, 2).map((item) => item.text) ?? [];
 
-  const shortPrompt = [
+  const shortPromptText = [
     profile.subject,
     profile.style,
     `Mood: ${profile.mood}`,
@@ -174,7 +231,7 @@ function buildImagePromptBundle(
     `Avoid: ${profile.negatives}`,
   ].join(', ');
 
-  const precisePrompt = [
+  const precisePromptText = [
     `Create an image of ${profile.subject}.`,
     `Visual style: ${profile.style}.`,
     `Mood and tone: ${profile.mood}.`,
@@ -188,7 +245,7 @@ function buildImagePromptBundle(
     `Negative prompt: ${profile.negatives}.`,
   ].join('\n');
 
-  const creativePrompt = [
+  const creativePromptText = [
     `Design a visually striking image centered on ${profile.subject}.`,
     `Push the image toward ${profile.style}, while keeping the mood ${profile.mood}.`,
     `Build the shot with ${profile.composition}, and place the subject in ${profile.environment}.`,
@@ -200,6 +257,45 @@ function buildImagePromptBundle(
     `Avoid the following: ${profile.negatives}.`,
   ].join('\n');
 
+  const buildStructuredPayload = (
+    variant: PromptVariant,
+    finalPrompt: string
+  ): StructuredImagePromptPayload => ({
+    format: 'weav-image-prompt/v1',
+    variant,
+    language: 'en',
+    strategy: 'structured_json_for_clarity',
+    model: {
+      id: modelId,
+      name: modelName,
+    },
+    scene: {
+      subject: profile.subject,
+      style: profile.style,
+      mood: profile.mood,
+      composition: profile.composition,
+      environment: profile.environment,
+    },
+    constraints: {
+      must_keep: toList(profile.emphasis),
+      avoid: toList(profile.negatives),
+      output_goal: profile.outputIntent,
+    },
+    references: {
+      similar_prompt_titles: topReferenceTitles.slice(0, 3),
+      style_cues: styleCues,
+      composition_cues: compositionCues,
+      environment_cues: environmentCues,
+      negative_cues: negativeCues,
+    },
+    prompts: {
+      final_prompt: finalPrompt,
+      negative_prompt: profile.negatives,
+      model_hint: modelHint,
+      reference_handling: referenceHint,
+    },
+  });
+
   const reasons = [
     `${modelName}에 맞춰 장면 설명, 구도, 강조 포인트 순으로 조립했습니다.`,
     topReferenceTitles.length
@@ -210,9 +306,9 @@ function buildImagePromptBundle(
 
   return {
     prompts: {
-      short: shortPrompt,
-      precise: precisePrompt,
-      creative: creativePrompt,
+      short: toJsonPrompt(buildStructuredPayload('short', shortPromptText)),
+      precise: toJsonPrompt(buildStructuredPayload('precise', precisePromptText)),
+      creative: toJsonPrompt(buildStructuredPayload('creative', creativePromptText)),
     },
     reasons,
   };
@@ -506,7 +602,7 @@ export function ImagePromptBuilderPanel({
                 </div>
                 <div className="rounded-lg border border-border/70 bg-muted/18">
                   <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                    <p className="text-xs font-semibold text-muted-foreground">완성 프롬프트</p>
+                    <p className="text-xs font-semibold text-muted-foreground">완성 프롬프트 JSON</p>
                     <div className="flex items-center gap-2">
                       <button
                         type="button"

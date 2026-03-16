@@ -1,13 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { chatApi } from '@/services/api/chatApi';
 import { useApp } from './AppContext';
-import { getDefaultImageOptions, normalizeChatModelId, type ImageGenOptions } from '@/constants/models';
+import { getDefaultImageOptions, IMAGE_MODEL_ID_NANO_BANANA, normalizeChatModelId, type ImageGenOptions } from '@/constants/models';
 import type { DocumentItem } from '@/types';
 
 const POLL_INTERVAL = 800;
 const POLL_MAX = 60;
 const DEFAULT_CHAT_MODEL = 'google/gemini-2.5-flash';
-const DEFAULT_IMAGE_MODEL = 'fal-ai/imagen4/preview';
+const DEFAULT_IMAGE_MODEL = IMAGE_MODEL_ID_NANO_BANANA;
 const STORAGE_KEY = 'weav-session-models';
 
 type SessionModels = Record<number, { chat: string; image: string }>;
@@ -165,6 +165,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const getChatInputMode = useCallback((sessionId: number) => chatInputModeBySession[sessionId] ?? 'text', [chatInputModeBySession]);
   const setChatInputMode = useCallback((sessionId: number, mode: 'text' | 'image') => {
+    if (mode === 'image') {
+      setModelBySession((prev) => (
+        prev[sessionId]
+          ? prev
+          : {
+              ...prev,
+              [sessionId]: { ...getStoredModels(prev, sessionId), image: DEFAULT_IMAGE_MODEL },
+            }
+      ));
+      setImageSettingsBySession((prev) => (
+        prev[sessionId]
+          ? prev
+          : {
+              ...prev,
+              [sessionId]: getDefaultImageOptions(DEFAULT_IMAGE_MODEL),
+            }
+      ));
+    }
     setChatInputModeBySession((prev) => ({ ...prev, [sessionId]: mode }));
   }, []);
   const getReferenceImageId = useCallback((sessionId: number) => referenceImageIdBySession[sessionId] ?? null, [referenceImageIdBySession]);

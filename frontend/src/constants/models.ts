@@ -28,11 +28,13 @@ export const IMAGE_MODEL_ID_FLUX = 'fal-ai/flux-pro/v1.1-ultra';
 export const IMAGE_MODEL_ID_GEMINI = 'fal-ai/gemini-3-pro-image-preview';
 export const IMAGE_MODEL_ID_KLING = 'kling-ai/kling-v1';
 export const IMAGE_MODEL_ID_NANO_BANANA = 'fal-ai/nano-banana-pro';
+export const IMAGE_MODEL_ID_NANO_BANANA_2 = 'fal-ai/nano-banana-2';
 
 export const IMAGE_MODELS: ImageModel[] = [
   { id: IMAGE_MODEL_ID_IMAGEN4, name: 'Imagen 4 (Google)', provider: 'Google' },
   { id: IMAGE_MODEL_ID_FLUX, name: 'FLUX Pro v1.1 Ultra', provider: 'fal.ai' },
   { id: IMAGE_MODEL_ID_NANO_BANANA, name: 'Nano Banana Pro', provider: 'Google' },
+  { id: IMAGE_MODEL_ID_NANO_BANANA_2, name: 'Nano Banana 2', provider: 'Google' },
   { id: IMAGE_MODEL_ID_KLING, name: 'Kling', provider: 'Kling' },
 ];
 
@@ -66,11 +68,17 @@ export const IMAGE_MODEL_SETTINGS: Record<string, ImageModelSettings> = {
     supportsSeed: true,
   },
   [IMAGE_MODEL_ID_NANO_BANANA]: {
-    aspectRatios: ['21:9', '16:9', '3:2', '4:3', '5:4', '1:1', '4:5', '3:4', '2:3', '9:16'],
+    aspectRatios: ['1:1', '21:9', '16:9', '3:2', '4:3', '5:4', '4:5', '3:4', '2:3', '9:16'],
     resolutions: ['1K', '2K', '4K'],
     outputFormats: ['png', 'jpeg', 'webp'],
     numImagesMax: 4,
     supportsSeed: true,
+  },
+  [IMAGE_MODEL_ID_NANO_BANANA_2]: {
+    aspectRatios: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '21:9', '9:21'],
+    outputFormats: ['jpeg', 'png'],
+    numImagesMax: 4,
+    supportsSeed: false,
   },
   [IMAGE_MODEL_ID_KLING]: {
     aspectRatios: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'],
@@ -89,8 +97,11 @@ export type ImageGenOptions = {
 
 export function getDefaultImageOptions(modelId: string): ImageGenOptions {
   const s = IMAGE_MODEL_SETTINGS[modelId];
+  const defaultAspectRatio = s?.aspectRatios?.includes('1:1')
+    ? '1:1'
+    : (s?.aspectRatios?.[0] ?? '1:1');
   return {
-    aspect_ratio: s?.aspectRatios?.[0] ?? '1:1',
+    aspect_ratio: defaultAspectRatio,
     num_images: 1,
     resolution: s?.resolutions?.[0] ?? '1K',
     output_format: s?.outputFormats?.[0] ?? 'png',
@@ -132,6 +143,7 @@ export const IMAGE_PROMPT_MAX_LENGTH_BY_MODEL: Record<string, number> = {
   [IMAGE_MODEL_ID_FLUX]: 10_000,
   [IMAGE_MODEL_ID_GEMINI]: 10_000,
   [IMAGE_MODEL_ID_NANO_BANANA]: 10_000,
+  [IMAGE_MODEL_ID_NANO_BANANA_2]: 10_000,
   [IMAGE_MODEL_ID_KLING]: 10_000,
 };
 
