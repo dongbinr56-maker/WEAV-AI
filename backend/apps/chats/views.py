@@ -1,9 +1,9 @@
 import logging
 import os
 import uuid
+
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.http import HttpResponse
 
@@ -18,19 +18,41 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+def _permission_denied_response():
+    return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+
+def _user_owns_session(request, owner) -> bool:
+    if owner is None:
+        return True
+    if not request.user.is_authenticated:
+        return False
+    return owner == request.user
+
+
+def _accessible_sessions_qs(request):
+    qs = Session.objects.all()
+    if request.user.is_authenticated:
+        return qs.filter(user=request.user)
+    return qs.filter(user__isnull=True)
+
+
+def _get_accessible_session(request, session_id):
+    try:
+        session = Session.objects.get(pk=session_id)
+    except Session.DoesNotExist:
+        return None, Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    if not _user_owns_session(request, session.user):
+        return None, _permission_denied_response()
+    return session, None
+
+
 @api_view(['GET', 'POST'])
 def session_list(request):
-    # In a real app, we should filter by request.user
-    # if request.user.is_authenticated:
-    #    qs = Session.objects.filter(user=request.user)
-    # else: qs = ...
-    
     if request.method == 'GET':
         kind = request.query_params.get('kind')
-        qs = Session.objects.all()
-        if request.user.is_authenticated:
-             qs = qs.filter(user=request.user)
-             
+        qs = _accessible_sessions_qs(request)
         if kind in (SESSION_KIND_CHAT, SESSION_KIND_IMAGE, SESSION_KIND_STUDIO):
             qs = qs.filter(kind=kind)
         serializer = SessionListSerializer(qs, many=True)
@@ -60,13 +82,9 @@ def session_list(request):
 
 @api_view(['GET', 'PATCH', 'DELETE'])
 def session_detail(request, session_id):
-    try:
-        session = Session.objects.get(pk=session_id)
-        # Verify ownership
-        if session.user and request.user.is_authenticated and session.user != request.user:
-             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
-    except Session.DoesNotExist:
-        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
         
     if request.method == 'GET':
         return Response(SessionDetailSerializer(session).data)
@@ -87,7 +105,7 @@ def session_detail(request, session_id):
             session.save(update_fields=list(dict.fromkeys(updated)))
         return Response(SessionListSerializer(session).data)
     if request.method == 'DELETE':
-        session.delete()
+        Session.objects.filter(pk=session.id).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
     return Response(status=status.HTTP_405_METHOD_NOT_ALLOWED)
 
@@ -125,7 +143,7 @@ def session_bulk_delete(request):
     forbidden = []
     deletable = []
     for sid, s in found.items():
-        if s.user and request.user.is_authenticated and s.user != request.user:
+        if not _user_owns_session(request, s.user):
             forbidden.append(sid)
         else:
             deletable.append(sid)
@@ -141,12 +159,9 @@ def session_bulk_delete(request):
 
 @api_view(['GET'])
 def session_messages(request, session_id):
-    try:
-        session = Session.objects.get(pk=session_id)
-        if session.user and request.user.is_authenticated and session.user != request.user:
-             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
-    except Session.DoesNotExist:
-        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
     if session.kind != SESSION_KIND_CHAT:
         return Response({'detail': 'Not a chat session'}, status=status.HTTP_400_BAD_REQUEST)
     serializer = MessageSerializer(session.messages.all(), many=True)
@@ -155,12 +170,9 @@ def session_messages(request, session_id):
 
 @api_view(['GET'])
 def session_images(request, session_id):
-    try:
-        session = Session.objects.get(pk=session_id)
-        if session.user and request.user.is_authenticated and session.user != request.user:
-             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
-    except Session.DoesNotExist:
-        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
     if session.kind != SESSION_KIND_IMAGE:
         return Response({'detail': 'Not an image session'}, status=status.HTTP_400_BAD_REQUEST)
     serializer = ImageRecordSerializer(session.image_records.all(), many=True)
@@ -170,12 +182,9 @@ def session_images(request, session_id):
 @api_view(['POST'])
 def session_upload(request, session_id):
     logger.info(f"Upload request for session {session_id}")
-    try:
-        session = Session.objects.get(pk=session_id)
-        if session.user and request.user.is_authenticated and session.user != request.user:
-             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
-    except Session.DoesNotExist:
-        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
     
     file_obj = request.FILES.get('file')
     if not file_obj:
@@ -238,12 +247,9 @@ def session_upload(request, session_id):
 
 @api_view(['GET'])
 def session_documents(request, session_id):
-    try:
-        session = Session.objects.get(pk=session_id)
-        if session.user and request.user.is_authenticated and session.user != request.user:
-             return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
-    except Session.DoesNotExist:
-        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
 
     docs = session.documents.all()
     serializer = DocumentSerializer(docs, many=True, context={'request': request})
@@ -252,12 +258,9 @@ def session_documents(request, session_id):
 
 @api_view(['GET'])
 def session_document_file(request, session_id, document_id):
-    try:
-        session = Session.objects.get(pk=session_id)
-        if session.user and request.user.is_authenticated and session.user != request.user:
-            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
-    except Session.DoesNotExist:
-        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
 
     try:
         doc = Document.objects.get(pk=document_id, session_id=session_id)
@@ -284,12 +287,9 @@ def session_document_file(request, session_id, document_id):
 
 @api_view(['DELETE'])
 def session_document_delete(request, session_id, document_id):
-    try:
-        session = Session.objects.get(pk=session_id)
-        if session.user and request.user.is_authenticated and session.user != request.user:
-            return Response({'detail': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
-    except Session.DoesNotExist:
-        return Response({'detail': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    session, denied = _get_accessible_session(request, session_id)
+    if denied:
+        return denied
 
     try:
         doc = Document.objects.get(pk=document_id, session_id=session_id)

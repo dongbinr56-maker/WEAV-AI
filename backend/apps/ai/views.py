@@ -305,14 +305,23 @@ def regenerate_image(request):
     else:
         prompt = str(prompt).strip()[:10000]
     model = request.data.get('model') or last_record.model
+    image_urls = request.data.get('image_urls') or []
+    image_urls = [u for u in image_urls if isinstance(u, str) and u.strip()]
+    body_ref_urls = request.data.get('reference_image_urls') or []
+    body_ref_urls = [u for u in body_ref_urls if isinstance(u, str) and u.strip()][:2]
     job = Job.objects.create(session=session, kind='image', status='pending')
     try:
         task = tasks.task_image.delay(
             job.id,
             prompt=prompt,
+            base_prompt=last_record.prompt,
             model=model,
             aspect_ratio=request.data.get('aspect_ratio') or '1:1',
             num_images=1,
+            reference_image_id=request.data.get('reference_image_id'),
+            reference_image_url=request.data.get('reference_image_url'),
+            reference_image_urls=body_ref_urls or None,
+            image_urls=image_urls,
             resolution=request.data.get('resolution'),
             output_format=request.data.get('output_format'),
             seed=request.data.get('seed'),

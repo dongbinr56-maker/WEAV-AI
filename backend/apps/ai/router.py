@@ -10,6 +10,8 @@ from .fal_client import (
     FAL_GEMINI3_PRO_IMAGE,
     FAL_NANO_BANANA_PRO,
     FAL_NANO_BANANA_PRO_EDIT,
+    FAL_NANO_BANANA_2,
+    FAL_NANO_BANANA_2_EDIT,
 )
 from .errors import AIError
 
@@ -21,7 +23,6 @@ CHAT_MODELS = [
     'anthropic/claude-opus-4.6',
     'anthropic/claude-sonnet-4.5',
     'meta-llama/llama-4-maverick',
-    'openai/gpt-oss-120b',
 ]
 
 CHAT_MODEL_ALIASES = {
@@ -44,7 +45,6 @@ MODEL_KNOWLEDGE_CUTOFF: dict[str, date | None] = {
     "anthropic/claude-opus-4.6": date(2025, 5, 1),
     "anthropic/claude-sonnet-4.5": date(2025, 7, 1), # Vertex AI docs
     "meta-llama/llama-4-maverick": date(2024, 8, 1),
-    "openai/gpt-oss-120b": None,                     # not specified in model card
 }
 
 def normalize_chat_model(model: Optional[str]) -> str:
@@ -61,6 +61,8 @@ IMAGE_MODEL_KLING = FAL_KLING
 IMAGE_MODEL_GEMINI3_PRO_IMAGE = FAL_GEMINI3_PRO_IMAGE
 IMAGE_MODEL_NANO_BANANA = FAL_NANO_BANANA_PRO
 IMAGE_MODEL_NANO_BANANA_EDIT = FAL_NANO_BANANA_PRO_EDIT
+IMAGE_MODEL_NANO_BANANA_2 = FAL_NANO_BANANA_2
+IMAGE_MODEL_NANO_BANANA_2_EDIT = FAL_NANO_BANANA_2_EDIT
 
 
 def run_chat(prompt: str, model: str = 'google/gemini-2.5-flash', system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: Optional[int] = None) -> str:

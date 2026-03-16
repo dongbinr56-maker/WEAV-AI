@@ -1,7 +1,6 @@
 import {
   IMAGE_MODEL_ID_FLUX,
   IMAGE_MODEL_ID_IMAGEN4,
-  IMAGE_MODEL_ID_KLING,
   IMAGE_MODEL_ID_NANO_BANANA,
   IMAGE_MODEL_ID_NANO_BANANA_2,
   IMAGE_MODELS,
@@ -44,41 +43,23 @@ export function getImageModelGuide(modelId: string, options?: { hasReference?: b
     };
   }
 
-  if (modelId === IMAGE_MODEL_ID_KLING) {
-    return {
-      modelName,
-      capabilities: [
-        '참조 이미지 기반 생성 지원',
-        hasReference ? '참조 이미지 + 텍스트 지시 가능' : '이미지 1개 첨부 + 텍스트 지시 가능',
-      ],
-      limitations: [
-        hasReference ? '참조 이미지 사용 중에는 추가 첨부 불가' : '이미지 첨부는 최대 1개',
-        '이미지 2개 이상 첨부 미지원',
-      ],
-      tips: [
-        '단일 이미지 기반 변형/확장 작업에 적합',
-        '2개 이상 이미지를 조합하려면 Nano Banana 사용을 권장합니다.',
-      ],
-      toast: 'Kling: 첨부는 최대 1개이며, 참조 사용 시 추가 첨부는 불가능합니다.',
-    };
-  }
-
   if (modelId === IMAGE_MODEL_ID_NANO_BANANA_2) {
     return {
       modelName,
       capabilities: [
+        '참조 이미지 기반 편집 지원',
         '텍스트 전용 이미지 생성(TTI)',
         '빠른 콘셉트 시안과 범용 비율 생성',
       ],
       limitations: [
-        '현재 채팅 UI 기준 참조 이미지/첨부 이미지 미지원',
-        '세밀한 편집보다는 단일 프롬프트 생성에 맞음',
+        '현재 채팅 UI 기준 첨부 이미지는 미지원',
+        '참조 기반 재생성 중심으로 사용하는 것이 안정적',
       ],
       tips: [
         '장면, 주제, 조명, 재질을 분리해서 구체적으로 쓰면 안정적입니다.',
-        '참조 기반 편집이 필요하면 Nano Banana Pro 또는 Studio의 edit 경로를 사용하세요.',
+        '참조 기반 편집이 필요하면 Nano Banana 2 또는 Nano Banana Pro를 사용하세요.',
       ],
-      toast: 'Nano Banana 2: 텍스트 전용 생성 모델로 추가되었습니다.',
+      toast: 'Nano Banana 2: 참조 이미지 기반 재생성과 텍스트 생성이 가능합니다.',
     };
   }
 
@@ -93,7 +74,7 @@ export function getImageModelGuide(modelId: string, options?: { hasReference?: b
         '첨부 이미지 미지원',
       ],
       tips: [
-        '이미지 입력이 필요한 작업은 Nano Banana 또는 Kling으로 전환하세요.',
+        '이미지 입력이 필요한 작업은 Nano Banana로 전환하세요.',
       ],
       toast: `${modelName}: 텍스트 전용 모델입니다. 이미지 첨부/참조는 지원하지 않습니다.`,
     };

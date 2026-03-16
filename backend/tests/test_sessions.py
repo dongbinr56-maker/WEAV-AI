@@ -3,7 +3,7 @@
 Docker 환경에서만 실행합니다.
 """
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.auth import get_user_model
 from django.test import TestCase, Client
@@ -53,6 +53,18 @@ class SessionAPITests(TestCase):
         data = response.json()
         self.assertEqual(len(data), 1)
         self.assertEqual(data[0]['kind'], SESSION_KIND_CHAT)
+
+    def test_anonymous_list_excludes_owned_sessions(self):
+        owner = get_user_model().objects.create_user(username='owner-list', password='testpass123')
+        Session.objects.create(kind=SESSION_KIND_CHAT, title='공개 채팅')
+        Session.objects.create(kind=SESSION_KIND_CHAT, title='비공개 채팅', user=owner)
+
+        response = self.client.get('/api/v1/sessions/')
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['title'], '공개 채팅')
 
 
 class ImageGenerationAPITests(TestCase):
@@ -157,6 +169,31 @@ class ChatPermissionAPITests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json().get('detail'), 'Permission denied')
+
+    def test_session_detail_forbidden_for_anonymous_user_on_owned_session(self):
+        response = self.client.get(f'/api/v1/sessions/{self.chat_session.id}/')
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json().get('detail'), 'Permission denied')
+
+    def test_session_delete_forbidden_for_anonymous_user_on_owned_session(self):
+        response = self.client.delete(f'/api/v1/sessions/{self.chat_session.id}/')
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json().get('detail'), 'Permission denied')
+        self.assertTrue(Session.objects.filter(pk=self.chat_session.id).exists())
+
+    def test_session_bulk_delete_forbidden_for_anonymous_user_on_owned_session(self):
+        response = self.client.post(
+            '/api/v1/sessions/bulk-delete/',
+            data={'ids': [self.chat_session.id]},
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json().get('deleted'), 0)
+        self.assertEqual(response.json().get('forbidden'), [self.chat_session.id])
+        self.assertTrue(Session.objects.filter(pk=self.chat_session.id).exists())
 
     def test_job_endpoints_forbidden_for_other_user(self):
         job = Job.objects.create(
@@ -340,6 +377,51 @@ class RegenerateAPITests(TestCase):
         job = Job.objects.get(pk=response.json()['job_id'])
         self.assertEqual(job.task_id, 'regen-image-task')
         self.assertEqual(job.status, 'pending')
+
+    def test_regenerate_image_forwards_reference_fields(self):
+        record = ImageRecord.objects.create(
+            session=self.image_session,
+            prompt='old prompt',
+            image_url='https://example.com/old.png',
+            model='fal-ai/nano-banana-pro',
+        )
+        reference = ImageRecord.objects.create(
+            session=self.image_session,
+            prompt='reference prompt',
+            image_url='https://example.com/reference.png',
+            model='fal-ai/nano-banana-pro',
+        )
+
+        with patch('apps.ai.tasks.task_image.delay') as mock_delay:
+            mock_delay.return_value.id = 'regen-image-task'
+            response = self.client.post(
+                '/api/v1/chat/image/regenerate/',
+                data={
+                    'session_id': self.image_session.id,
+                    'prompt': 'new prompt',
+                    'reference_image_id': reference.id,
+                    'image_urls': ['https://example.com/attach.png'],
+                },
+                content_type='application/json',
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(ImageRecord.objects.filter(pk=record.id).exists())
+        mock_delay.assert_called_once_with(
+            ANY,
+            prompt='new prompt',
+            model='fal-ai/nano-banana-pro',
+            base_prompt='old prompt',
+            aspect_ratio='1:1',
+            num_images=1,
+            reference_image_id=reference.id,
+            reference_image_url=None,
+            reference_image_urls=None,
+            image_urls=['https://example.com/attach.png'],
+            resolution=None,
+            output_format=None,
+            seed=None,
+        )
 
     def test_regenerate_chat_requires_user_assistant_pair(self):
         Message.objects.create(session=self.session, role='user', content='첫 질문만 있음')

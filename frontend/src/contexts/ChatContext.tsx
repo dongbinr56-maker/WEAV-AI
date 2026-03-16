@@ -1,11 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { chatApi } from '@/services/api/chatApi';
 import { useApp } from './AppContext';
-import { getDefaultImageOptions, IMAGE_MODEL_ID_NANO_BANANA, normalizeChatModelId, type ImageGenOptions } from '@/constants/models';
+import { getDefaultImageOptions, IMAGE_MODEL_ID_NANO_BANANA, normalizeChatModelId, normalizeImageModelId, type ImageGenOptions } from '@/constants/models';
 import type { DocumentItem } from '@/types';
 
 const POLL_INTERVAL = 800;
-const POLL_MAX = 60;
+const CHAT_POLL_MAX = 60;
+const IMAGE_POLL_MAX = 225;
+const IMAGE_BACKGROUND_POLL_MAX = 750;
 const DEFAULT_CHAT_MODEL = 'google/gemini-2.5-flash';
 const DEFAULT_IMAGE_MODEL = IMAGE_MODEL_ID_NANO_BANANA;
 const STORAGE_KEY = 'weav-session-models';
@@ -20,7 +22,7 @@ function loadModelsFromStorage(): SessionModels {
     return Object.fromEntries(
       Object.entries(parsed).map(([k, v]) => [
         Number(k),
-        { ...v, chat: normalizeChatModelId(v?.chat) },
+        { ...v, chat: normalizeChatModelId(v?.chat), image: normalizeImageModelId(v?.image) },
       ])
     ) as SessionModels;
   } catch {
@@ -40,7 +42,7 @@ function getStoredModels(stored: SessionModels | undefined, sessionId: number) {
   const s = stored?.[sessionId];
   return {
     chat: normalizeChatModelId(s?.chat ?? DEFAULT_CHAT_MODEL),
-    image: s?.image ?? DEFAULT_IMAGE_MODEL,
+    image: normalizeImageModelId(s?.image ?? DEFAULT_IMAGE_MODEL),
   };
 }
 
@@ -61,6 +63,8 @@ type PendingImageRequestState = {
   attachmentImageUrls: string[];
 } | null;
 
+type RegenerateImageOptions = { prompt?: string; model?: string } & Partial<ImageGenOptions>;
+
 type ChatContextValue = {
   sending: boolean;
   error: string | null;
@@ -68,7 +72,7 @@ type ChatContextValue = {
   sendImageRequest: (prompt: string, model: string, options?: { referenceImageId?: number; referenceImageUrl?: string } & Partial<ImageGenOptions>) => Promise<boolean>;
   stopGeneration: () => void;
   regenerateChat: (sessionId: number, options?: RegenerateChatOptions) => Promise<void>;
-  regenerateImage: (sessionId: number, options?: { prompt?: string } & Partial<ImageGenOptions>) => Promise<void>;
+  regenerateImage: (sessionId: number, options?: RegenerateImageOptions) => Promise<void>;
   getChatModel: (sessionId: number) => string;
   setChatModel: (sessionId: number, model: string) => void;
   getImageModel: (sessionId: number) => string;
@@ -145,6 +149,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const abortRef = useRef(false);
   const currentTaskIdRef = useRef<string | null>(null);
+  const backgroundImagePollsRef = useRef<Set<string>>(new Set());
   const setSendingRef = useRef<(v: boolean) => void>(() => {});
   setSendingRef.current = setSending;
 
@@ -158,9 +163,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     }));
   }, []);
   const setImageModel = useCallback((sessionId: number, model: string) => {
+    const normalized = normalizeImageModelId(model);
     setModelBySession((prev) => ({
       ...prev,
-      [sessionId]: { ...getStoredModels(prev, sessionId), image: model },
+      [sessionId]: { ...getStoredModels(prev, sessionId), image: normalized },
     }));
   }, []);
   const getChatInputMode = useCallback((sessionId: number) => chatInputModeBySession[sessionId] ?? 'text', [chatInputModeBySession]);
@@ -264,9 +270,39 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     [refreshDocuments]
   );
 
-  const pollJob = useCallback(
+  const pollJobInBackground = useCallback(
     async (taskId: string, sessionId: number) => {
-      for (let i = 0; i < POLL_MAX; i++) {
+      if (backgroundImagePollsRef.current.has(taskId)) return;
+      backgroundImagePollsRef.current.add(taskId);
+      try {
+        for (let i = 0; i < IMAGE_BACKGROUND_POLL_MAX; i++) {
+          const status = await chatApi.jobStatus(taskId).catch(() => null);
+          if (!status) {
+            await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+            continue;
+          }
+          if (status.status === 'success' || status.status === 'failure') {
+            const isStillCurrent = await refreshSession(sessionId);
+            if (status.status === 'failure' && status.error && isStillCurrent) setError(status.error);
+            return;
+          }
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+        }
+      } finally {
+        backgroundImagePollsRef.current.delete(taskId);
+      }
+    },
+    [refreshSession]
+  );
+
+  const pollJob = useCallback(
+    async (
+      taskId: string,
+      sessionId: number,
+      options?: { maxAttempts?: number; timeoutMessage?: string; continueInBackground?: boolean }
+    ) => {
+      const maxAttempts = options?.maxAttempts ?? CHAT_POLL_MAX;
+      for (let i = 0; i < maxAttempts; i++) {
         if (abortRef.current) {
           abortRef.current = false;
           currentTaskIdRef.current = null;
@@ -282,10 +318,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL));
       }
       currentTaskIdRef.current = null;
+      if (options?.continueInBackground) {
+        await refreshSession(sessionId);
+        void pollJobInBackground(taskId, sessionId);
+        return;
+      }
       const isStillCurrent = await refreshSession(sessionId);
-      if (isStillCurrent) setError('응답 대기 시간이 초과되었습니다.');
+      if (isStillCurrent) setError(options?.timeoutMessage ?? '응답 대기 시간이 초과되었습니다.');
     },
-    [refreshSession]
+    [pollJobInBackground, refreshSession]
   );
 
   const stopGeneration = useCallback(() => {
@@ -309,7 +350,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const res = await chatApi.completeChat(sessionId, prompt, model);
         currentTaskIdRef.current = res.task_id;
         await refreshSession(sessionId);
-        await pollJob(res.task_id, sessionId);
+        await pollJob(res.task_id, sessionId, { maxAttempts: CHAT_POLL_MAX });
       } catch (e) {
         currentTaskIdRef.current = null;
         setError(e instanceof Error ? e.message : '전송 실패');
@@ -369,7 +410,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         });
         currentTaskIdRef.current = res.task_id;
         await refreshSession(sessionId);
-        await pollJob(res.task_id, sessionId);
+        await pollJob(res.task_id, sessionId, {
+          maxAttempts: IMAGE_POLL_MAX,
+          continueInBackground: true,
+        });
         succeeded = true;
       } catch (e) {
         currentTaskIdRef.current = null;
@@ -395,7 +439,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         const res = await chatApi.regenerateChat(sessionId, model, prompt);
         currentTaskIdRef.current = res.task_id;
         await refreshSession(sessionId);
-        await pollJob(res.task_id, sessionId);
+        await pollJob(res.task_id, sessionId, { maxAttempts: CHAT_POLL_MAX });
       } catch (e) {
         currentTaskIdRef.current = null;
         setError(e instanceof Error ? e.message : '재생성 실패');
@@ -407,21 +451,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   );
 
   const regenerateImage = useCallback(
-    async (sessionId: number, options?: { prompt?: string } & Partial<ImageGenOptions>) => {
+    async (sessionId: number, options?: RegenerateImageOptions) => {
       if (!currentSession || currentSession.id !== sessionId) return;
       const isImageSession = currentSession.kind === 'image';
       const isChatWithImageMode = currentSession.kind === 'chat' && getChatInputMode(sessionId) === 'image';
       if (!isImageSession && !isChatWithImageMode) return;
       const prompt = options?.prompt;
+      const useSessionRefs = (currentSession.reference_image_urls?.length ?? 0) > 0;
+      const refUrl = useSessionRefs ? null : (referenceImageUrlBySession[sessionId] ?? null);
+      const refId = refUrl == null ? (referenceImageIdBySession[sessionId] ?? null) : null;
+      const attachmentUrls = getAttachmentItems(sessionId)
+        .map((item) => item.remoteUrl)
+        .filter((u): u is string => Boolean(u));
+      const referenceImageUrls = useSessionRefs
+        ? (currentSession.reference_image_urls ?? []).filter((u): u is string => Boolean(u)).slice(0, 2)
+        : (refUrl ? [refUrl] : []);
       if (prompt != null) {
         setPendingImageRequest({
           sessionId,
           prompt,
-          referenceImageUrls: [],
-          attachmentImageUrls: [],
+          referenceImageUrls,
+          attachmentImageUrls: attachmentUrls,
         });
       }
-      const imageModel = getImageModel(sessionId);
+      const imageModel = options?.model ?? getImageModel(sessionId);
       const settings = getImageSettings(sessionId, imageModel);
       const merged = { ...settings, ...options };
       abortRef.current = false;
@@ -432,13 +485,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           prompt: prompt?.trim() || undefined,
           model: imageModel,
           aspectRatio: merged.aspect_ratio,
+          ...(refUrl != null && refUrl !== '' && { referenceImageUrl: refUrl }),
+          ...(refId != null && { referenceImageId: refId }),
+          ...(useSessionRefs && referenceImageUrls.length > 0 && { referenceImageUrls }),
+          ...(attachmentUrls.length > 0 && { imageUrls: attachmentUrls }),
           resolution: merged.resolution,
           outputFormat: merged.output_format,
           seed: merged.seed,
         });
         currentTaskIdRef.current = res.task_id;
         await refreshSession(sessionId);
-        await pollJob(res.task_id, sessionId);
+        await pollJob(res.task_id, sessionId, {
+          maxAttempts: IMAGE_POLL_MAX,
+          continueInBackground: true,
+        });
       } catch (e) {
         currentTaskIdRef.current = null;
         setError(e instanceof Error ? e.message : '재생성 실패');
@@ -447,7 +507,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setSending(false);
       }
     },
-    [currentSession, getChatInputMode, getImageModel, getImageSettings, pollJob, refreshSession]
+    [currentSession, getAttachmentItems, getChatInputMode, getImageModel, getImageSettings, pollJob, refreshSession, referenceImageIdBySession, referenceImageUrlBySession]
   );
 
   const value: ChatContextValue = {

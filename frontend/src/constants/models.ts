@@ -7,7 +7,6 @@ export const CHAT_MODELS: ChatModel[] = [
   { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6', provider: 'Anthropic' },
   { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'Anthropic' },
   { id: 'meta-llama/llama-4-maverick', name: 'Llama 4 Maverick', provider: 'Meta' },
-  { id: 'openai/gpt-oss-120b', name: 'GPT OSS 120B', provider: 'OpenAI' },
 ];
 
 export function normalizeChatModelId(modelId: string | null | undefined): string {
@@ -35,8 +34,17 @@ export const IMAGE_MODELS: ImageModel[] = [
   { id: IMAGE_MODEL_ID_FLUX, name: 'FLUX Pro v1.1 Ultra', provider: 'fal.ai' },
   { id: IMAGE_MODEL_ID_NANO_BANANA, name: 'Nano Banana Pro', provider: 'Google' },
   { id: IMAGE_MODEL_ID_NANO_BANANA_2, name: 'Nano Banana 2', provider: 'Google' },
-  { id: IMAGE_MODEL_ID_KLING, name: 'Kling', provider: 'Kling' },
 ];
+
+export function normalizeImageModelId(modelId: string | null | undefined): string {
+  const raw = String(modelId ?? '').trim();
+  const aliases: Record<string, string> = {
+    [IMAGE_MODEL_ID_KLING]: IMAGE_MODEL_ID_NANO_BANANA,
+  };
+  const next = aliases[raw] ?? raw;
+  const supported = new Set(IMAGE_MODELS.map((m) => m.id));
+  return supported.has(next) ? next : IMAGE_MODEL_ID_NANO_BANANA;
+}
 
 export type ImageModelSettings = {
   aspectRatios: string[];
@@ -110,8 +118,8 @@ export function getDefaultImageOptions(modelId: string): ImageGenOptions {
 
 /** 참조 이미지(업로드·선택)를 지원하는 이미지 모델 ID */
 export const IMAGE_MODELS_SUPPORT_REFERENCE = [
-  IMAGE_MODEL_ID_KLING,
   IMAGE_MODEL_ID_NANO_BANANA,
+  IMAGE_MODEL_ID_NANO_BANANA_2,
 ] as const;
 
 export function imageModelSupportsReference(modelId: string): boolean {
@@ -130,7 +138,6 @@ export const IMAGE_PROMPT_MAX_LENGTH = 10_000;
 export const CHAT_PROMPT_MAX_LENGTH_BY_MODEL: Record<string, number> = {
   'google/gemini-2.5-flash': 1_000_000,
   'openai/gpt-4.1': 128_000,
-  'openai/gpt-oss-120b': 128_000,
   'anthropic/claude-sonnet-4.6': 320_000,
   'anthropic/claude-opus-4.6': 320_000,
   'anthropic/claude-sonnet-4.5': 320_000,

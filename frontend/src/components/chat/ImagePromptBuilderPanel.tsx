@@ -11,7 +11,13 @@ import { translateToEnglish } from '@/services/studio/geminiService';
 
 type PromptVariant = 'short' | 'precise' | 'creative';
 
-type PromptBundle = Record<PromptVariant, string>;
+type PromptBundle = Record<
+  PromptVariant,
+  {
+    display: string;
+    apply: string;
+  }
+>;
 
 type ImagePromptBuilderPanelProps = {
   open: boolean;
@@ -39,40 +45,17 @@ type ImagePromptProfile = {
 
 type PromptReferenceContext = LocalbananaPromptLibrarySearchResult | null;
 
-type StructuredImagePromptPayload = {
-  format: 'weav-image-prompt/v1';
-  variant: PromptVariant;
-  language: 'en';
-  strategy: 'structured_json_for_clarity';
-  model: {
-    id: string;
-    name: string;
-  };
-  scene: {
-    subject: string;
-    style: string;
-    mood: string;
-    composition: string;
-    environment: string;
-  };
-  constraints: {
-    must_keep: string[];
-    avoid: string[];
-    output_goal: string;
-  };
-  references: {
-    similar_prompt_titles: string[];
-    style_cues: string[];
-    composition_cues: string[];
-    environment_cues: string[];
-    negative_cues: string[];
-  };
-  prompts: {
-    final_prompt: string;
-    negative_prompt: string;
-    model_hint: string;
-    reference_handling: string;
-  };
+type PromptJsonPayload = {
+  subject: string;
+  style: string;
+  mood: string;
+  composition: string;
+  environment: string;
+  must_keep: string[];
+  avoid: string[];
+  output_goal: string;
+  final_prompt: string;
+  negative_prompt: string;
 };
 
 const VARIANT_LABELS: Record<PromptVariant, string> = {
@@ -92,8 +75,19 @@ function toList(value: string): string[] {
     .filter(Boolean);
 }
 
-function toJsonPrompt(payload: StructuredImagePromptPayload): string {
+function toJsonPrompt(payload: PromptJsonPayload): string {
   return JSON.stringify(payload, null, 2);
+}
+
+function cleanClause(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').replace(/[.,;:!?]+$/g, '');
+}
+
+function joinPromptClauses(clauses: string[]): string {
+  return clauses
+    .map(cleanClause)
+    .filter(Boolean)
+    .join(', ');
 }
 
 function inferImageProfile(
@@ -205,95 +199,46 @@ function buildImagePromptBundle(
     ? 'If a reference image is attached, preserve identity, silhouette, and key reference cues unless explicitly changed.'
     : 'Do not assume a reference image is available; make the prompt self-sufficient.';
   const modelHint = getModelPromptHint(modelId);
-  const referenceCues = [
-    ...(style ? references?.blockMatches.style.slice(0, 1).map((item) => item.text) ?? [] : []),
-    ...(composition ? references?.blockMatches.composition.slice(0, 1).map((item) => item.text) ?? [] : []),
-    ...(environment ? references?.blockMatches.environment.slice(0, 1).map((item) => item.text) ?? [] : []),
-    ...(negatives ? references?.blockMatches.negative.slice(0, 1).map((item) => item.text) ?? [] : []),
-  ].filter(Boolean);
   const topReferenceTitles = references?.topMatches.map((item) => item.title) ?? [];
-  const styleCues = references?.blockMatches.style.slice(0, 2).map((item) => item.text) ?? [];
-  const compositionCues = references?.blockMatches.composition.slice(0, 2).map((item) => item.text) ?? [];
-  const environmentCues = [
-    ...(references?.blockMatches.environment.slice(0, 1).map((item) => item.text) ?? []),
-    ...(references?.blockMatches.lighting.slice(0, 1).map((item) => item.text) ?? []),
-  ].filter(Boolean);
-  const negativeCues = references?.blockMatches.negative.slice(0, 2).map((item) => item.text) ?? [];
-
-  const shortPromptText = [
+  const shortPromptText = joinPromptClauses([
     profile.subject,
     profile.style,
-    `Mood: ${profile.mood}`,
-    `Composition: ${profile.composition}`,
-    `Environment: ${profile.environment}`,
-    `Emphasis: ${profile.emphasis}`,
-    `Output intent: ${profile.outputIntent}`,
-    `Avoid: ${profile.negatives}`,
-  ].join(', ');
+    profile.composition,
+    profile.environment,
+  ]);
 
-  const precisePromptText = [
-    `Create an image of ${profile.subject}.`,
-    `Visual style: ${profile.style}.`,
-    `Mood and tone: ${profile.mood}.`,
-    `Composition and camera direction: ${profile.composition}.`,
-    `Environment and background: ${profile.environment}.`,
-    `Critical details to preserve or emphasize: ${profile.emphasis}.`,
-    `Final output goal: ${profile.outputIntent}.`,
-    modelHint,
-    referenceCues.length ? `Reference pattern cues: ${referenceCues.join(' | ')}.` : '',
-    referenceHint,
-    `Negative prompt: ${profile.negatives}.`,
-  ].join('\n');
+  const precisePromptText = joinPromptClauses([
+    profile.subject,
+    profile.style,
+    `${profile.mood} mood`,
+    profile.composition,
+    profile.environment,
+    profile.emphasis,
+    profile.outputIntent,
+  ]);
 
-  const creativePromptText = [
-    `Design a visually striking image centered on ${profile.subject}.`,
-    `Push the image toward ${profile.style}, while keeping the mood ${profile.mood}.`,
-    `Build the shot with ${profile.composition}, and place the subject in ${profile.environment}.`,
-    `Make the image feel deliberate and premium, with emphasis on ${profile.emphasis}.`,
-    `The final frame should be ${profile.outputIntent}.`,
-    `${modelHint}`,
-    referenceCues.length ? `Borrow selective cues from similar prompt patterns: ${referenceCues.join(' | ')}.` : '',
-    `${referenceHint}`,
-    `Avoid the following: ${profile.negatives}.`,
-  ].join('\n');
+  const creativePromptText = joinPromptClauses([
+    profile.subject,
+    `${profile.style} with a ${profile.mood} mood`,
+    profile.composition,
+    profile.environment,
+    `emphasize ${cleanClause(profile.emphasis).toLowerCase()}`,
+    `designed for ${cleanClause(profile.outputIntent).toLowerCase()}`,
+  ]);
 
-  const buildStructuredPayload = (
-    variant: PromptVariant,
+  const buildPromptJsonPayload = (
     finalPrompt: string
-  ): StructuredImagePromptPayload => ({
-    format: 'weav-image-prompt/v1',
-    variant,
-    language: 'en',
-    strategy: 'structured_json_for_clarity',
-    model: {
-      id: modelId,
-      name: modelName,
-    },
-    scene: {
-      subject: profile.subject,
-      style: profile.style,
-      mood: profile.mood,
-      composition: profile.composition,
-      environment: profile.environment,
-    },
-    constraints: {
-      must_keep: toList(profile.emphasis),
-      avoid: toList(profile.negatives),
-      output_goal: profile.outputIntent,
-    },
-    references: {
-      similar_prompt_titles: topReferenceTitles.slice(0, 3),
-      style_cues: styleCues,
-      composition_cues: compositionCues,
-      environment_cues: environmentCues,
-      negative_cues: negativeCues,
-    },
-    prompts: {
-      final_prompt: finalPrompt,
-      negative_prompt: profile.negatives,
-      model_hint: modelHint,
-      reference_handling: referenceHint,
-    },
+  ): PromptJsonPayload => ({
+    subject: profile.subject,
+    style: profile.style,
+    mood: profile.mood,
+    composition: profile.composition,
+    environment: profile.environment,
+    must_keep: toList(profile.emphasis),
+    avoid: toList(profile.negatives),
+    output_goal: profile.outputIntent,
+    final_prompt: finalPrompt,
+    negative_prompt: profile.negatives,
   });
 
   const reasons = [
@@ -301,14 +246,25 @@ function buildImagePromptBundle(
     topReferenceTitles.length
       ? `LocalBanana 코퍼스에서 의미 기반 유사도 검색 후 ${topReferenceTitles.slice(0, 3).join(', ')} 를 참고해 패턴을 반영했습니다.`
       : 'LocalBanana 유사 프롬프트 매치가 부족해 입력값 중심으로 조립했습니다.',
+    modelHint,
+    referenceHint,
     'subject/style/composition/environment/lighting/negative 블록을 분리해 재조합하도록 바꿨습니다.',
   ];
 
   return {
     prompts: {
-      short: toJsonPrompt(buildStructuredPayload('short', shortPromptText)),
-      precise: toJsonPrompt(buildStructuredPayload('precise', precisePromptText)),
-      creative: toJsonPrompt(buildStructuredPayload('creative', creativePromptText)),
+      short: {
+        display: toJsonPrompt(buildPromptJsonPayload(shortPromptText)),
+        apply: shortPromptText,
+      },
+      precise: {
+        display: toJsonPrompt(buildPromptJsonPayload(precisePromptText)),
+        apply: precisePromptText,
+      },
+      creative: {
+        display: toJsonPrompt(buildPromptJsonPayload(creativePromptText)),
+        apply: creativePromptText,
+      },
     },
     reasons,
   };
@@ -440,7 +396,7 @@ export function ImagePromptBuilderPanel({
   const handleCopy = async () => {
     if (!bundle) return;
     try {
-      await navigator.clipboard.writeText(bundle[activeVariant]);
+      await navigator.clipboard.writeText(bundle[activeVariant].display);
       setCopyLabel('복사됨');
       window.setTimeout(() => setCopyLabel('복사'), 1200);
     } catch {
@@ -451,12 +407,12 @@ export function ImagePromptBuilderPanel({
 
   const handleApply = () => {
     if (!bundle) return;
-    onApplyPrompt(bundle[activeVariant]);
+    onApplyPrompt(bundle[activeVariant].apply);
     setApplyLabel('삽입됨');
     window.setTimeout(() => setApplyLabel('입력창에 넣기'), 1200);
   };
 
-  const activePrompt = bundle?.[activeVariant] ?? '';
+  const activePrompt = bundle?.[activeVariant].display ?? '';
 
   return (
     <>
@@ -622,14 +578,14 @@ export function ImagePromptBuilderPanel({
                       </button>
                     </div>
                   </div>
-                  <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap px-3 py-3 text-xs leading-relaxed text-foreground">
+                  <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] px-3 py-3 text-xs leading-relaxed text-foreground">
                     {activePrompt}
                   </pre>
                 </div>
                 <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-2">
                   <p className="text-xs font-semibold text-muted-foreground">생성 근거</p>
                   {reasons.map((reason) => (
-                    <p key={reason} className="mt-1 text-xs text-muted-foreground">
+                    <p key={reason} className="mt-1 text-xs text-muted-foreground break-words [overflow-wrap:anywhere]">
                       {reason}
                     </p>
                   ))}
@@ -644,10 +600,10 @@ export function ImagePromptBuilderPanel({
                           href={item.url}
                           target="_blank"
                           rel="noreferrer"
-                          className="block rounded-md border border-border/60 bg-secondary/35 px-2.5 py-2 text-xs text-muted-foreground hover:text-foreground"
+                          className="block min-w-0 rounded-md border border-border/60 bg-secondary/35 px-2.5 py-2 text-xs text-muted-foreground hover:text-foreground"
                         >
-                          <div className="font-medium text-foreground">{item.title}</div>
-                          <div className="mt-1 line-clamp-2">{item.keywords.join(', ')}</div>
+                          <div className="font-medium text-foreground break-words [overflow-wrap:anywhere]">{item.title}</div>
+                          <div className="mt-1 line-clamp-2 break-words [overflow-wrap:anywhere]">{item.keywords.join(', ')}</div>
                         </a>
                       ))}
                     </div>
@@ -656,7 +612,7 @@ export function ImagePromptBuilderPanel({
                 {references ? (
                   <div className="rounded-lg border border-border/70 bg-background/70 px-3 py-2">
                     <p className="text-xs font-semibold text-muted-foreground">선택된 블록</p>
-                    <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+                    <div className="mt-2 space-y-2 text-xs text-muted-foreground break-words [overflow-wrap:anywhere]">
                       {references.blockMatches.style[0] ? (
                         <p><span className="font-medium text-foreground">Style</span>: {references.blockMatches.style[0].text}</p>
                       ) : null}

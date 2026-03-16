@@ -9,6 +9,7 @@ import { DocumentPanel } from './DocumentPanel';
 import { ImageModelGuidePanel } from './ImageModelGuidePanel';
 import { ImagePromptBuilderPanel } from './ImagePromptBuilderPanel';
 import { PromptOrchestratorPanel } from './PromptOrchestratorPanel';
+import { IMAGE_MODEL_ID_NANO_BANANA_2, imageModelSupportsReference } from '@/constants/models';
 import type { Citation, Message, ImageRecord } from '@/types';
 
 type TimelineItem = { type: 'message'; data: Message } | { type: 'image'; data: ImageRecord };
@@ -35,6 +36,7 @@ export function ChatView() {
     sending,
     getChatInputMode,
     getImageModel,
+    setImageModel,
     getReferenceImageId,
     setReferenceImageId,
     getDocuments,
@@ -44,7 +46,6 @@ export function ChatView() {
   } = useChat();
   const { showToast } = useToast();
   const scrollRef = useRef<HTMLElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
   const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
   const [docPanelOpen, setDocPanelOpen] = useState(false);
@@ -60,6 +61,7 @@ export function ChatView() {
   const [orchestratorPanelOpen, setOrchestratorPanelOpen] = useState(false);
   const [orchestratorPanelWidth, setOrchestratorPanelWidth] = useState(ORCHESTRATOR_PANEL_WIDTH);
   const [isMobileViewport, setIsMobileViewport] = useState(() => window.innerWidth < 1024);
+  const [focusComposerSignal, setFocusComposerSignal] = useState(0);
   const messageCount = currentSession?.messages?.length ?? 0;
   const imageRecordCount = currentSession?.image_records?.length ?? 0;
 
@@ -72,9 +74,33 @@ export function ChatView() {
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     nearBottomRef.current = true;
+    const scrollToBottom = (nextBehavior: ScrollBehavior) => {
+      const el = scrollRef.current;
+      if (el) {
+        el.scrollTo({ top: el.scrollHeight, behavior: nextBehavior });
+      }
+
+      const mainEl = el?.closest('main') as HTMLElement | null;
+      if (mainEl) {
+        mainEl.scrollTo({ top: mainEl.scrollHeight, behavior: nextBehavior });
+      }
+
+      const doc = document.documentElement;
+      const scrollingEl = document.scrollingElement as HTMLElement | null;
+      const pageTop = Math.max(doc.scrollHeight, document.body.scrollHeight);
+      scrollingEl?.scrollTo({ top: pageTop, behavior: nextBehavior });
+      window.scrollTo({ top: pageTop, behavior: nextBehavior });
+    };
+
+    scrollToBottom(behavior);
     requestAnimationFrame(() => {
-      endRef.current?.scrollIntoView({ behavior, block: 'end' });
+      scrollToBottom('auto');
+      requestAnimationFrame(() => {
+        scrollToBottom('auto');
+      });
     });
+    window.setTimeout(() => scrollToBottom('auto'), 80);
+    window.setTimeout(() => scrollToBottom('auto'), 220);
   }, []);
 
   useEffect(() => {
@@ -82,19 +108,26 @@ export function ChatView() {
     const el = scrollRef.current;
     if (!el) return;
     if (!nearBottomRef.current) return;
-    requestAnimationFrame(() => {
-      // Use endRef so padding/scroll-padding are respected.
-      endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-    });
-  }, [messageCount, imageRecordCount, currentSession?.id, inputAreaHeight]);
+    scrollToLatest('auto');
+  }, [messageCount, imageRecordCount, currentSession?.id, inputAreaHeight, scrollToLatest]);
 
   useEffect(() => {
     // When switching sessions, default to bottom.
     nearBottomRef.current = true;
-    requestAnimationFrame(() => {
-      endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-    });
-  }, [currentSession?.id]);
+    scrollToLatest('auto');
+  }, [currentSession?.id, scrollToLatest]);
+
+  useEffect(() => {
+    if (!currentSession) return;
+    if (pendingImageRequest?.sessionId !== currentSession.id) return;
+    scrollToLatest('auto');
+  }, [pendingImageRequest?.sessionId, pendingImageRequest?.prompt, currentSession?.id, scrollToLatest]);
+
+  useEffect(() => {
+    if (!currentSession || !sending) return;
+    nearBottomRef.current = true;
+    scrollToLatest('auto');
+  }, [sending, currentSession?.id, scrollToLatest]);
 
   useEffect(() => {
     if (currentSession?.kind === 'chat') {
@@ -379,7 +412,12 @@ export function ChatView() {
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setReferenceImageId(currentSession.id, referenceImageId === item.data.id ? null : item.data.id);
+                              const nextReferenceId = referenceImageId === item.data.id ? null : item.data.id;
+                              if (nextReferenceId != null && imageModel && !imageModelSupportsReference(imageModel)) {
+                                setImageModel(currentSession.id, IMAGE_MODEL_ID_NANO_BANANA_2);
+                                showToast('참조 이미지 재생성은 Nano Banana Pro 또는 Nano Banana 2에서 지원됩니다. Nano Banana 2로 자동 전환했습니다.');
+                              }
+                              setReferenceImageId(currentSession.id, nextReferenceId);
                             }}
                             className={`p-1.5 rounded border transition-colors duration-200 ${
                               referenceImageId === item.data.id
@@ -469,13 +507,13 @@ export function ChatView() {
             </div>
           )}
         </div>
-        <div ref={endRef} className="h-px" />
         </main>
       </div>
       <ChatInput
         rightOffset={rightOffset}
         onHeightChange={setInputAreaHeight}
-        onSubmitStart={() => scrollToLatest('smooth')}
+        onSubmitStart={() => scrollToLatest('auto')}
+        focusComposerSignal={focusComposerSignal}
       />
       {isMobileViewport && panelsOpen && (
         <button
@@ -553,6 +591,10 @@ export function ChatView() {
           modelId={imageModel}
           onApplyPrompt={(prompt) => {
             setRegenerateImagePrompt(currentSession.id, prompt);
+            setImagePromptPanelOpen(false);
+            setModelGuidePanelOpen(false);
+            scrollToLatest('auto');
+            setFocusComposerSignal((prev) => prev + 1);
             showToast('프롬프트를 입력창에 넣었습니다.');
           }}
         />

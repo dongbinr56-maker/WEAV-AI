@@ -13,6 +13,8 @@ from .router import (
     IMAGE_MODEL_KLING,
     IMAGE_MODEL_NANO_BANANA,
     IMAGE_MODEL_NANO_BANANA_EDIT,
+    IMAGE_MODEL_NANO_BANANA_2,
+    IMAGE_MODEL_NANO_BANANA_2_EDIT,
 )
 from .errors import AIError
 from .utils import get_rag_enhanced_system_prompt, get_rag_context_string
@@ -259,6 +261,7 @@ def task_image(
     job_id: int,
     prompt: str,
     model: str,
+    base_prompt: str = None,
     aspect_ratio: str = '1:1',
     num_images: int = 1,
     seed: int = None,
@@ -316,6 +319,20 @@ def task_image(
         effective_model = IMAGE_MODEL_NANO_BANANA_EDIT
         if edit_image_urls is None:
             edit_image_urls = [ref_url] if ref_url else session_ref_list[:2]
+    elif model == IMAGE_MODEL_NANO_BANANA_2:
+        if has_reference or has_attachments or session_ref_list:
+            effective_model = IMAGE_MODEL_NANO_BANANA_2_EDIT
+            if edit_image_urls is None:
+                edit_image_urls = []
+                if session_ref_list:
+                    edit_image_urls.extend(session_ref_list[:2])
+                else:
+                    if has_reference and ref_url:
+                        edit_image_urls.append(ref_url)
+                    edit_image_urls.extend(attachments)
+                edit_image_urls = [u for u in edit_image_urls if u][:14]
+        else:
+            effective_model = IMAGE_MODEL_NANO_BANANA_2
 
     # 사용자 입력으로 들어온 참조/첨부 이미지를 타임라인에 다시 보여주기 위한 메타데이터
     # (모델별 내부 fallback로 변형되기 전의 원본 입력 기준)
@@ -333,8 +350,21 @@ def task_image(
             ref_url = edit_image_urls[0]
 
     try:
-        rag_context = get_rag_context_string(job.session.id, prompt)
-        effective_prompt = f"{rag_context}\n\nRequest: {prompt}" if rag_context else prompt
+        base_text = (base_prompt or '').strip()
+        prompt_text = (prompt or '').strip()
+        if base_text and prompt_text and prompt_text != base_text:
+            effective_prompt = (
+                f"{base_text}\n\n"
+                f"Edit instruction: {prompt_text}\n\n"
+                "Preserve the current subject identity, environment, outfit logic, and overall visual style unless the edit instruction explicitly changes them."
+            )
+            if input_reference_urls or input_attachment_urls:
+                effective_prompt += "\nUse the provided reference image(s) as a strong guide for pose, limb placement, and composition."
+        else:
+            effective_prompt = prompt_text or base_text
+
+        rag_context = get_rag_context_string(job.session.id, effective_prompt)
+        effective_prompt = f"{rag_context}\n\nRequest: {effective_prompt}" if rag_context else effective_prompt
         images = run_image(
             effective_prompt,
             model=effective_model,

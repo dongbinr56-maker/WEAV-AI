@@ -12,8 +12,8 @@ import {
   IMAGE_MODEL_ID_IMAGEN4,
   IMAGE_MODEL_ID_FLUX,
   IMAGE_MODEL_ID_GEMINI,
-  IMAGE_MODEL_ID_KLING,
   IMAGE_MODEL_ID_NANO_BANANA,
+  IMAGE_MODEL_ID_NANO_BANANA_2,
   imageModelSupportsReference,
   validateChatPrompt,
   validateImagePrompt,
@@ -27,10 +27,12 @@ export function ChatInput({
   rightOffset = 0,
   onHeightChange,
   onSubmitStart,
+  focusComposerSignal = 0,
 }: {
   rightOffset?: number;
   onHeightChange?: (height: number) => void;
   onSubmitStart?: () => void;
+  focusComposerSignal?: number;
 }) {
   const { currentSession } = useApp();
   const {
@@ -110,19 +112,10 @@ export function ChatInput({
       const baseMax = hasReference ? 1 : 2;
       return { maxCount: isRegenLimited ? Math.min(1, baseMax) : baseMax, blockMessage: '' };
     }
-    if (imageModel === IMAGE_MODEL_ID_KLING) {
-      const baseMax = hasReference ? 0 : 1;
-      return {
-        maxCount: isRegenLimited ? Math.min(1, baseMax) : baseMax,
-        blockMessage: hasReference
-          ? 'Kling은 참조 이미지 사용 시 추가 첨부를 지원하지 않습니다. Nano Banana를 사용하세요.'
-          : 'Kling은 이미지 첨부를 1개까지만 지원합니다. 2개 첨부가 필요하면 Nano Banana를 사용하세요.',
-      };
-    }
     if (imageModel === IMAGE_MODEL_ID_IMAGEN4 || imageModel === IMAGE_MODEL_ID_FLUX || imageModel === IMAGE_MODEL_ID_GEMINI) {
       return {
         maxCount: 0,
-        blockMessage: '이 모델은 이미지 첨부를 지원하지 않습니다. Nano Banana 또는 Kling을 사용하세요.',
+        blockMessage: '이 모델은 이미지 첨부를 지원하지 않습니다. Nano Banana를 사용하세요.',
       };
     }
     return { maxCount: 0, blockMessage: '이 모델은 이미지 첨부를 지원하지 않습니다.' };
@@ -145,6 +138,14 @@ export function ChatInput({
       inputRef.current?.focus();
     }
   }, [regenerateImagePrompt?.sessionId, regenerateImagePrompt?.prompt, currentSession?.id]);
+
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    const end = input.value.length;
+    input.setSelectionRange(end, end);
+  }, [focusComposerSignal]);
 
   useEffect(() => {
     const el = inputRef.current;
@@ -222,9 +223,13 @@ export function ChatInput({
     e.preventDefault();
     const text = prompt.trim();
     if (!text || sending) return;
+    let effectiveImageModel = imageModel;
 
     if (showImageFeatures) {
-      const result = validateImagePrompt(text, imageModel);
+      if (hasAnyReferenceImage) {
+        effectiveImageModel = ensureReferenceCompatibleModel(imageModel);
+      }
+      const result = validateImagePrompt(text, effectiveImageModel);
       if (!result.valid) {
         showToast(result.message);
         return;
@@ -257,9 +262,9 @@ export function ChatInput({
       await regenerateChat(currentSession.id, { prompt: text, model: chatModel });
     } else if (isRegenerateImageMode && currentSession) {
       clearRegenerateImagePrompt();
-      await regenerateImage(currentSession.id, { prompt: text });
+      await regenerateImage(currentSession.id, { prompt: text, model: effectiveImageModel });
     } else if (showImageFeatures) {
-      const success = await sendImageRequest(text, imageModel);
+      const success = await sendImageRequest(text, effectiveImageModel);
       if (success) {
         clearAttachmentItems(sessionId);
         setReferenceImageUrl(sessionId, null);
@@ -324,6 +329,7 @@ export function ChatInput({
       showToast('이미지 파일만 업로드할 수 있습니다 (JPEG, PNG, WebP)');
       return;
     }
+    ensureReferenceCompatibleModel(imageModel);
     setUploadingRef(true);
     try {
       const { url } = await chatApi.uploadReferenceImage(file);
@@ -410,6 +416,17 @@ export function ChatInput({
 
   const supportsReference = showImageFeatures && imageModelSupportsReference(imageModel);
   const hasRefImage = hasReference;
+  const hasSessionReferenceImages = showImageFeatures && (currentSession.reference_image_urls?.length ?? 0) > 0;
+  const hasAnyReferenceImage = hasRefImage || hasSessionReferenceImages;
+
+  const ensureReferenceCompatibleModel = (candidateModel: string) => {
+    if (imageModelSupportsReference(candidateModel)) return candidateModel;
+    const nextModel = IMAGE_MODEL_ID_NANO_BANANA_2;
+    setImageModel(currentSession.id, nextModel);
+    setModelInfoOpen(false);
+    showToast('참조 이미지 재생성은 Nano Banana Pro 또는 Nano Banana 2에서 지원됩니다. Nano Banana 2로 자동 전환했습니다.');
+    return nextModel;
+  };
 
   const handleImageModelChange = (nextModel: string) => {
     if (nextModel === imageModel) return;

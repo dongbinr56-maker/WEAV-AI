@@ -27,6 +27,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
   const [creating, setCreating] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<number>>(() => new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const firstFocusableRef = useRef<HTMLButtonElement>(null);
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
@@ -63,15 +64,38 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
     await selectSession(s);
   };
 
+  const setDeletingState = (ids: number[], deleting: boolean) => {
+    setDeletingIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => {
+        if (deleting) next.add(id);
+        else next.delete(id);
+      });
+      return next;
+    });
+  };
+
+  const runDeleteSession = async (id: number) => {
+    setConfirmState(null);
+    setDeletingState([id], true);
+    try {
+      await deleteSession(id);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '삭제에 실패했습니다.';
+      showToast(msg);
+    } finally {
+      setDeletingState([id], false);
+    }
+  };
+
   const handleDelete = (e: React.MouseEvent, id: number) => {
     e.stopPropagation();
     setConfirmState({
       open: true,
       title: '채팅 삭제',
       message: '이 채팅을 삭제할까요?',
-      onConfirm: async () => {
-        await deleteSession(id);
-        setConfirmState(null);
+      onConfirm: () => {
+        void runDeleteSession(id);
       },
     });
   };
@@ -82,9 +106,8 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
       open: true,
       title: 'WEAV Studio 프로젝트 삭제',
       message: '이 프로젝트를 삭제할까요?',
-      onConfirm: async () => {
-        await deleteSession(id);
-        setConfirmState(null);
+      onConfirm: () => {
+        void runDeleteSession(id);
       },
     });
   };
@@ -122,21 +145,22 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
       title: '선택한 내역 삭제',
       message: `선택한 ${ids.length}개의 내역을 삭제할까요?${suffix ? ` (${suffix})` : ''}`,
       onConfirm: async () => {
+        setConfirmState(null);
+        setDeletingState(ids, true);
         try {
           const { failedIds } = await deleteSessions(ids);
           if (failedIds.length > 0) {
             showToast(`${failedIds.length}개 삭제에 실패했습니다.`);
             setSelectedIds(new Set(failedIds));
-            setConfirmState(null);
             return;
           }
           setSelectedIds(new Set());
           setSelectMode(false);
-          setConfirmState(null);
         } catch (e) {
           const msg = e instanceof Error ? e.message : '삭제에 실패했습니다.';
           showToast(msg);
-          setConfirmState(null);
+        } finally {
+          setDeletingState(ids, false);
         }
       },
     });
@@ -201,7 +225,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                 <button
                   type="button"
                   onClick={handleBulkDelete}
-                  disabled={selectedIds.size === 0}
+                  disabled={selectedIds.size === 0 || deletingIds.size > 0}
                   className="px-2 py-1.5 rounded-md text-sm font-medium border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
                   aria-label="선택 삭제"
                   title="선택 삭제"
@@ -252,7 +276,9 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                   <p className="text-muted-foreground text-sm px-2 py-1">채팅 내역이 없습니다.</p>
                 ) : (
                 <>
-                {chatSessions.map((s) => (
+                {chatSessions.map((s) => {
+                  const isDeleting = deletingIds.has(s.id);
+                  return (
                   <div
                     key={s.id}
                     className={`group flex items-center gap-1 rounded-lg text-sm border ${
@@ -263,8 +289,9 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                         : currentSession?.id === s.id
                           ? 'bg-primary/12 border-primary/40'
                           : 'border-transparent hover:bg-secondary/60'
-                    } transition-colors duration-200`}
+                    } ${isDeleting ? 'opacity-60' : ''} transition-colors duration-200`}
                     onClick={() => {
+                      if (isDeleting) return;
                       if (!selectMode) return;
                       toggleSelected(s.id);
                     }}
@@ -289,6 +316,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                             checked={selectedIds.has(s.id)}
                             onChange={() => toggleSelected(s.id)}
                             onClick={(e) => e.stopPropagation()}
+                            disabled={isDeleting}
                             className="ml-2 h-4 w-4 accent-primary"
                             aria-label={`${s.title || `채팅 ${s.id}`} 선택`}
                           />
@@ -296,6 +324,10 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                         <button
                           type="button"
                           onClick={(e) => {
+                            if (isDeleting) {
+                              e.stopPropagation();
+                              return;
+                            }
                             if (selectMode) {
                               e.stopPropagation();
                               toggleSelected(s.id);
@@ -303,6 +335,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                             }
                             handleSelect(s);
                           }}
+                          disabled={isDeleting}
                           className={`flex-1 min-w-0 text-left truncate ${selectMode ? 'px-2 py-2' : 'px-3 py-2'}`}
                         >
                           {s.title || `채팅 ${s.id}`}
@@ -311,6 +344,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                           <button
                             type="button"
                             onClick={(e) => startEdit(e, s)}
+                            disabled={isDeleting}
                             className="p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:bg-secondary text-muted-foreground shrink-0"
                             title="제목 변경"
                             aria-label="제목 변경"
@@ -324,6 +358,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                       <button
                         type="button"
                         onClick={(e) => handleDelete(e, s.id)}
+                        disabled={isDeleting}
                         className="p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:bg-destructive/20 text-muted-foreground hover:text-destructive shrink-0"
                         title="채팅 삭제"
                         aria-label="채팅 삭제"
@@ -332,7 +367,8 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                       </button>
                     )}
                   </div>
-                ))}
+                  );
+                })}
                 </>
                 )}
               </div>
@@ -368,7 +404,9 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                   <p className="text-muted-foreground text-sm px-2 py-1">WEAV Studio 프로젝트가 없습니다.</p>
                 ) : (
                 <>
-                {studioSessions.map((s) => (
+                {studioSessions.map((s) => {
+                  const isDeleting = deletingIds.has(s.id);
+                  return (
                   <div
                     key={s.id}
                     className={`group flex items-center gap-1 rounded-lg text-sm border ${
@@ -379,8 +417,9 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                         : currentSession?.id === s.id
                           ? 'bg-primary/12 border-primary/40'
                           : 'border-transparent hover:bg-secondary/60'
-                    } transition-colors duration-200`}
+                    } ${isDeleting ? 'opacity-60' : ''} transition-colors duration-200`}
                     onClick={() => {
+                      if (isDeleting) return;
                       if (!selectMode) return;
                       toggleSelected(s.id);
                     }}
@@ -405,6 +444,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                             checked={selectedIds.has(s.id)}
                             onChange={() => toggleSelected(s.id)}
                             onClick={(e) => e.stopPropagation()}
+                            disabled={isDeleting}
                             className="ml-2 h-4 w-4 accent-primary"
                             aria-label={`${s.title || `Studio ${s.id}`} 선택`}
                           />
@@ -412,6 +452,10 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                         <button
                           type="button"
                           onClick={(e) => {
+                            if (isDeleting) {
+                              e.stopPropagation();
+                              return;
+                            }
                             if (selectMode) {
                               e.stopPropagation();
                               toggleSelected(s.id);
@@ -419,6 +463,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                             }
                             handleSelect(s);
                           }}
+                          disabled={isDeleting}
                           className={`flex-1 min-w-0 text-left truncate ${selectMode ? 'px-2 py-2' : 'px-3 py-2'}`}
                         >
                           {s.title || `Studio ${s.id}`}
@@ -427,6 +472,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                           <button
                             type="button"
                             onClick={(e) => startEdit(e, s)}
+                            disabled={isDeleting}
                             className="p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:bg-secondary text-muted-foreground shrink-0"
                             title="제목 변경"
                             aria-label="제목 변경"
@@ -440,6 +486,7 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                       <button
                         type="button"
                         onClick={(e) => handleDeleteStudio(e, s.id)}
+                        disabled={isDeleting}
                         className="p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:bg-destructive/20 text-muted-foreground hover:text-destructive shrink-0"
                         title="프로젝트 삭제"
                         aria-label="프로젝트 삭제"
@@ -448,7 +495,8 @@ export function Sidebar({ open, onStudioClick }: SidebarProps) {
                       </button>
                     )}
                   </div>
-                ))}
+                  );
+                })}
                 </>
                 )}
               </div>
