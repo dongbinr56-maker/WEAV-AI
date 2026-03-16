@@ -3,6 +3,7 @@ import {
   IMAGE_MODEL_ID_IMAGEN4,
   IMAGE_MODEL_ID_KLING,
   IMAGE_MODEL_ID_NANO_BANANA,
+  IMAGE_MODEL_ID_NANO_BANANA_2,
   IMAGE_MODELS,
 } from '@/constants/models';
 
@@ -59,6 +60,25 @@ export function getImageModelGuide(modelId: string, options?: { hasReference?: b
         '2개 이상 이미지를 조합하려면 Nano Banana 사용을 권장합니다.',
       ],
       toast: 'Kling: 첨부는 최대 1개이며, 참조 사용 시 추가 첨부는 불가능합니다.',
+    };
+  }
+
+  if (modelId === IMAGE_MODEL_ID_NANO_BANANA_2) {
+    return {
+      modelName,
+      capabilities: [
+        '텍스트 전용 이미지 생성(TTI)',
+        '빠른 콘셉트 시안과 범용 비율 생성',
+      ],
+      limitations: [
+        '현재 채팅 UI 기준 참조 이미지/첨부 이미지 미지원',
+        '세밀한 편집보다는 단일 프롬프트 생성에 맞음',
+      ],
+      tips: [
+        '장면, 주제, 조명, 재질을 분리해서 구체적으로 쓰면 안정적입니다.',
+        '참조 기반 편집이 필요하면 Nano Banana Pro 또는 Studio의 edit 경로를 사용하세요.',
+      ],
+      toast: 'Nano Banana 2: 텍스트 전용 생성 모델로 추가되었습니다.',
     };
   }
 
