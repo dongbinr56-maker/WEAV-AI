@@ -7,6 +7,7 @@ import { ChatMessage } from './ChatMessage';
 import { ChatInput } from './ChatInput';
 import { DocumentPanel } from './DocumentPanel';
 import { ImageModelGuidePanel } from './ImageModelGuidePanel';
+import { ImagePromptBuilderPanel } from './ImagePromptBuilderPanel';
 import { PromptOrchestratorPanel } from './PromptOrchestratorPanel';
 import type { Citation, Message, ImageRecord } from '@/types';
 
@@ -21,6 +22,9 @@ const ORCHESTRATOR_PANEL_MAX_WIDTH = 760;
 const GUIDE_PANEL_WIDTH = 340;
 const GUIDE_PANEL_MIN_WIDTH = 280;
 const GUIDE_PANEL_MAX_WIDTH = 520;
+const IMAGE_PROMPT_PANEL_WIDTH = 380;
+const IMAGE_PROMPT_PANEL_MIN_WIDTH = 320;
+const IMAGE_PROMPT_PANEL_MAX_WIDTH = 760;
 
 export function ChatView() {
   const { currentSession } = useApp();
@@ -51,6 +55,8 @@ export function ChatView() {
   const [inputAreaHeight, setInputAreaHeight] = useState(0);
   const [modelGuidePanelOpen, setModelGuidePanelOpen] = useState(false);
   const [modelGuidePanelWidth, setModelGuidePanelWidth] = useState(GUIDE_PANEL_WIDTH);
+  const [imagePromptPanelOpen, setImagePromptPanelOpen] = useState(false);
+  const [imagePromptPanelWidth, setImagePromptPanelWidth] = useState(IMAGE_PROMPT_PANEL_WIDTH);
   const [orchestratorPanelOpen, setOrchestratorPanelOpen] = useState(false);
   const [orchestratorPanelWidth, setOrchestratorPanelWidth] = useState(ORCHESTRATOR_PANEL_WIDTH);
   const [isMobileViewport, setIsMobileViewport] = useState(() => window.innerWidth < 1024);
@@ -96,6 +102,8 @@ export function ChatView() {
     } else {
       setDocPanelOpen(false);
       setOrchestratorPanelOpen(false);
+      setImagePromptPanelOpen(false);
+      setModelGuidePanelOpen(false);
     }
     setActiveCitations(null);
     setActiveCitationIndex(0);
@@ -120,6 +128,25 @@ export function ChatView() {
     }
   }, [currentSession, getDocuments, activeDocId, activeCitations]);
 
+  const sessionKind = currentSession?.kind ?? null;
+  const isStudio = sessionKind === 'studio';
+  const isChat = sessionKind === 'chat';
+  const isImageMode = currentSession ? (isChat ? getChatInputMode(currentSession.id) === 'image' : true) : false;
+  const showImageContent = isImageMode;
+  const messages = currentSession?.messages ?? [];
+  const responseCount = messages.filter((m) => m.role === 'assistant').length;
+  const imageRecords = currentSession?.image_records ?? [];
+  const referenceImageId = currentSession ? getReferenceImageId(currentSession.id) : null;
+  const documents = isChat && currentSession ? getDocuments(currentSession.id) : [];
+  const imageModel = showImageContent && currentSession ? getImageModel(currentSession.id) : null;
+
+  useEffect(() => {
+    if (!showImageContent) {
+      setImagePromptPanelOpen(false);
+      setModelGuidePanelOpen(false);
+    }
+  }, [showImageContent]);
+
   if (!currentSession) {
     return (
       <div className="weav-chat-bg flex-1 flex items-center justify-center text-muted-foreground animate-fade-in">
@@ -130,20 +157,10 @@ export function ChatView() {
     );
   }
 
-  // WEAV Studio 세션은 ChatView에서 처리하지 않음
-  if (currentSession.kind === 'studio') {
+  if (isStudio) {
     return null;
   }
 
-  const isChat = currentSession.kind === 'chat';
-  const isImageMode = isChat ? getChatInputMode(currentSession.id) === 'image' : true;
-  const showImageContent = isImageMode;
-  const messages = currentSession.messages ?? [];
-  const responseCount = messages.filter((m) => m.role === 'assistant').length;
-  const imageRecords = currentSession.image_records ?? [];
-  const referenceImageId = getReferenceImageId(currentSession.id);
-  const documents = isChat ? getDocuments(currentSession.id) : [];
-  const imageModel = showImageContent ? getImageModel(currentSession.id) : null;
   // 메시지와 이미지를 시간순으로 한 타임라인에 공존
   const timelineItems: TimelineItem[] = [
     ...messages.map((m) => ({ type: 'message' as const, data: m })),
@@ -156,8 +173,8 @@ export function ChatView() {
 
   const rightOffset = isChat && !showImageContent
     ? (isMobileViewport ? 0 : (docPanelOpen ? docPanelWidth : orchestratorPanelOpen ? orchestratorPanelWidth : 0))
-    : (isMobileViewport ? 0 : (modelGuidePanelOpen ? modelGuidePanelWidth : 0));
-  const panelsOpen = docPanelOpen || orchestratorPanelOpen || modelGuidePanelOpen;
+    : (isMobileViewport ? 0 : (imagePromptPanelOpen ? imagePromptPanelWidth : modelGuidePanelOpen ? modelGuidePanelWidth : 0));
+  const panelsOpen = docPanelOpen || orchestratorPanelOpen || modelGuidePanelOpen || imagePromptPanelOpen;
   // Keep the latest message fully visible above the fixed composer (blur overlay).
   const bottomPad = Math.max(440, inputAreaHeight + 260);
 
@@ -173,6 +190,22 @@ export function ChatView() {
     setOrchestratorPanelOpen((prev) => {
       const next = !prev;
       if (next) setDocPanelOpen(false);
+      return next;
+    });
+  };
+
+  const toggleImagePromptPanel = () => {
+    setImagePromptPanelOpen((prev) => {
+      const next = !prev;
+      if (next) setModelGuidePanelOpen(false);
+      return next;
+    });
+  };
+
+  const toggleModelGuidePanel = () => {
+    setModelGuidePanelOpen((prev) => {
+      const next = !prev;
+      if (next) setImagePromptPanelOpen(false);
       return next;
     });
   };
@@ -451,6 +484,7 @@ export function ChatView() {
           onClick={() => {
             setDocPanelOpen(false);
             setOrchestratorPanelOpen(false);
+            setImagePromptPanelOpen(false);
             setModelGuidePanelOpen(false);
           }}
           className="fixed inset-0 top-14 z-10 bg-background/55 backdrop-blur-[2px] lg:hidden"
@@ -506,10 +540,29 @@ export function ChatView() {
           onResize={setOrchestratorPanelWidth}
         />
       )}
+      {showImageContent && currentSession && imageModel && (
+        <ImagePromptBuilderPanel
+          open={imagePromptPanelOpen}
+          onToggle={toggleImagePromptPanel}
+          showTrigger={!modelGuidePanelOpen}
+          triggerTopClassName="top-40"
+          panelWidth={imagePromptPanelWidth}
+          minWidth={IMAGE_PROMPT_PANEL_MIN_WIDTH}
+          maxWidth={IMAGE_PROMPT_PANEL_MAX_WIDTH}
+          onResize={setImagePromptPanelWidth}
+          modelId={imageModel}
+          onApplyPrompt={(prompt) => {
+            setRegenerateImagePrompt(currentSession.id, prompt);
+            showToast('프롬프트를 입력창에 넣었습니다.');
+          }}
+        />
+      )}
       {showImageContent && imageModel && (
         <ImageModelGuidePanel
           open={modelGuidePanelOpen}
-          onToggle={() => setModelGuidePanelOpen((v) => !v)}
+          onToggle={toggleModelGuidePanel}
+          showTrigger={!imagePromptPanelOpen}
+          triggerTopClassName="top-28"
           panelWidth={modelGuidePanelWidth}
           minWidth={GUIDE_PANEL_MIN_WIDTH}
           maxWidth={GUIDE_PANEL_MAX_WIDTH}

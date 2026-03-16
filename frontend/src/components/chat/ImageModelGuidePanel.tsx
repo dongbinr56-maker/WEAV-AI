@@ -5,6 +5,8 @@ import { getImageModelGuide } from './imageModelGuide';
 type ImageModelGuidePanelProps = {
   open: boolean;
   onToggle: () => void;
+  showTrigger?: boolean;
+  triggerTopClassName?: string;
   panelWidth: number;
   minWidth: number;
   maxWidth: number;
@@ -15,6 +17,8 @@ type ImageModelGuidePanelProps = {
 export function ImageModelGuidePanel({
   open,
   onToggle,
+  showTrigger = true,
+  triggerTopClassName = 'top-28',
   panelWidth,
   minWidth,
   maxWidth,
@@ -47,11 +51,11 @@ export function ImageModelGuidePanel({
 
   return (
     <>
-      {!open && (
+      {!open && showTrigger && (
         <button
           type="button"
           onClick={onToggle}
-          className="fixed right-0 top-28 z-20 rounded-l-xl border border-border/65 bg-card/86 backdrop-blur-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+          className={`fixed right-0 ${triggerTopClassName} z-20 rounded-l-xl border border-border/65 bg-card/86 backdrop-blur-xl px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground`}
         >
           모델 가이드
         </button>

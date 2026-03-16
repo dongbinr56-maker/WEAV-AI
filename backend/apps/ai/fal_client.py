@@ -34,6 +34,7 @@ FAL_GEMINI3_PRO_IMAGE_EDIT = 'fal-ai/gemini-3-pro-image-preview/edit'
 # Nano Banana 2
 FAL_NANO_BANANA_2 = 'fal-ai/nano-banana-2'
 FAL_NANO_BANANA_2_EDIT = 'fal-ai/nano-banana-2/edit'
+FAL_VIDEO_PROMPT_GENERATOR = 'fal-ai/video-prompt-generator'
 # Backward-compatible aliases used elsewhere in the backend.
 FAL_NANO_BANANA_PRO = FAL_NANO_BANANA_2
 FAL_NANO_BANANA_PRO_EDIT = FAL_NANO_BANANA_2_EDIT
@@ -136,6 +137,60 @@ def _openrouter_queue_result(request_id: str) -> dict:
         msg = _extract_error_message(r)
         logger.warning("fal openrouter queue result %s: status=%s body=%s", url, r.status_code, msg)
         raise FALError(f'OpenRouter 결과 조회 실패 ({r.status_code}): {msg}')
+    return r.json() if r.content else {}
+
+
+def _fal_queue_submit(endpoint: str, payload: dict, timeout: int = 30) -> dict:
+    url = f'{FAL_QUEUE_BASE}/{endpoint}'
+    headers = {**_fal_auth_header(), 'Content-Type': 'application/json'}
+    r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    if not r.ok:
+        msg = _extract_error_message(r)
+        logger.warning("fal queue submit %s: status=%s body=%s", url, r.status_code, msg)
+        raise FALError(f'fal 요청 실패 ({r.status_code}): {msg}')
+    return r.json() if r.content else {}
+
+
+def _fal_queue_poll(endpoint: str, request_id: str, timeout_sec: int = 120, poll_interval_sec: float = 0.6) -> None:
+    import time
+
+    start = time.time()
+    headers = _fal_auth_header()
+    logs = '1' if _fal_debug_enabled() else '0'
+    status_url = f'{FAL_QUEUE_BASE}/{endpoint}/requests/{request_id}/status?logs={logs}'
+    while True:
+        if time.time() - start > max(1, timeout_sec):
+            raise FALError('fal 응답 대기 시간이 초과되었습니다. 잠시 후 다시 시도해 주세요.')
+        r = requests.get(status_url, headers=headers, timeout=20)
+        if not r.ok:
+            msg = _extract_error_message(r)
+            logger.warning("fal queue status %s: status=%s body=%s", status_url, r.status_code, msg)
+            raise FALError(f'fal 상태 조회 실패 ({r.status_code}): {msg}')
+        data = r.json() if r.content else {}
+        status = (data.get('status') or '').upper()
+        if status == 'COMPLETED':
+            return
+        if status in ('FAILED', 'FAILURE', 'ERROR'):
+            logs_data = data.get('logs')
+            detail = ''
+            if isinstance(logs_data, dict):
+                detail = str(logs_data.get('message') or logs_data.get('error') or '').strip()
+            raise FALError(f'fal 요청이 실패했습니다.{f" {detail}" if detail else ""}')
+        if status in ('IN_QUEUE', 'IN_PROGRESS'):
+            time.sleep(max(0.2, float(poll_interval_sec)))
+            continue
+        logger.warning("fal queue unknown status: endpoint=%s data=%s", endpoint, data)
+        raise FALError(f'fal 상태가 올바르지 않습니다: {status or "unknown"}')
+
+
+def _fal_queue_result(endpoint: str, request_id: str) -> dict:
+    url = f'{FAL_QUEUE_BASE}/{endpoint}/requests/{request_id}'
+    headers = _fal_auth_header()
+    r = requests.get(url, headers=headers, timeout=30)
+    if not r.ok:
+        msg = _extract_error_message(r)
+        logger.warning("fal queue result %s: status=%s body=%s", url, r.status_code, msg)
+        raise FALError(f'fal 결과 조회 실패 ({r.status_code}): {msg}')
     return r.json() if r.content else {}
 
 
@@ -395,6 +450,56 @@ def chat_completion(prompt: str, model: str = 'google/gemini-2.5-flash', system_
     if output is None:
         raise FALError('OpenRouter 응답이 비어 있습니다.')
     return output if isinstance(output, str) else str(output)
+
+
+def generate_video_prompt_fal(
+    input_concept: str,
+    *,
+    style: Optional[str] = None,
+    camera_style: Optional[str] = None,
+    camera_direction: Optional[str] = None,
+    pacing: Optional[str] = None,
+    special_effects: Optional[str] = None,
+    custom_elements: Optional[str] = None,
+    model: Optional[str] = None,
+    prompt_length: str = 'medium',
+) -> dict:
+    payload = {
+        'input_concept': (input_concept or '').strip(),
+        'prompt_length': prompt_length if prompt_length in ('short', 'medium', 'long') else 'medium',
+        'model': (model or '').strip() or 'google/gemini-2.0-flash-001',
+    }
+    optional_fields = {
+        'style': style,
+        'camera_style': camera_style,
+        'camera_direction': camera_direction,
+        'pacing': pacing,
+        'special_effects': special_effects,
+        'custom_elements': custom_elements,
+    }
+    for key, value in optional_fields.items():
+        if isinstance(value, str) and value.strip():
+            payload[key] = value.strip()
+    if not payload['input_concept']:
+        raise FALError('input_concept is required')
+
+    queue = _fal_queue_submit(FAL_VIDEO_PROMPT_GENERATOR, payload)
+    request_id = queue.get('request_id')
+    if not request_id:
+        raise FALError('Video Prompt Generator 요청 ID를 받지 못했습니다.')
+    if _fal_debug_enabled():
+        logger.info('fal video prompt queue request_id=%s payload=%s', request_id, _sanitize_payload(payload))
+    timeout_sec = int(os.environ.get('FAL_VIDEO_PROMPT_TIMEOUT_SEC', '120') or '120')
+    poll_interval = float(os.environ.get('FAL_VIDEO_PROMPT_POLL_SEC', '0.6') or '0.6')
+    _fal_queue_poll(FAL_VIDEO_PROMPT_GENERATOR, request_id, timeout_sec=timeout_sec, poll_interval_sec=poll_interval)
+    result = _fal_queue_result(FAL_VIDEO_PROMPT_GENERATOR, request_id)
+    prompt = result.get('prompt')
+    if prompt is None:
+        raise FALError('Video Prompt Generator 응답에 prompt가 없습니다.')
+    return {
+        'prompt': prompt if isinstance(prompt, str) else str(prompt),
+        'model': result.get('model') or payload['model'],
+    }
 
 
 def image_generation_fal(prompt: str, model: str = FAL_IMAGEN4, aspect_ratio: str = '1:1', num_images: int = 1, **kwargs) -> list[dict]:
@@ -696,6 +801,74 @@ def _normalize_korean_for_tts(text: str) -> str:
     return result
 
 
+def _coerce_duration_ms(value) -> int:
+    try:
+        if value is None:
+            return 0
+        if isinstance(value, str) and not value.strip():
+            return 0
+        parsed = float(value)
+        if not parsed or parsed <= 0:
+            return 0
+        return int(round(parsed))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _probe_remote_audio_duration_ms(audio_url: str) -> int:
+    """
+    Download remote audio to a temp file and calculate duration with ffprobe.
+    Returns duration in milliseconds, or 0 on failure.
+    """
+    if not audio_url or not isinstance(audio_url, str):
+        return 0
+
+    temp_path = None
+    try:
+        parsed = urlparse(audio_url)
+        suffix = os.path.splitext(parsed.path or '')[1] or '.mp3'
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            temp_path = tmp.name
+            with requests.get(audio_url, stream=True, timeout=120) as resp:
+                resp.raise_for_status()
+                for chunk in resp.iter_content(chunk_size=1024 * 256):
+                    if chunk:
+                        tmp.write(chunk)
+
+        probe = subprocess.run(
+            [
+                'ffprobe',
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                temp_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if probe.returncode != 0:
+            logger.warning('ffprobe failed for tts audio: %s', probe.stderr.strip() or probe.stdout.strip())
+            return 0
+        duration_raw = (probe.stdout or '').strip()
+        if not duration_raw:
+            return 0
+        duration_sec = float(duration_raw)
+        if duration_sec <= 0:
+            return 0
+        return int(round(duration_sec * 1000))
+    except Exception:
+        logger.exception('tts duration probe failed')
+        return 0
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
 def tts_elevenlabs(
     text: str,
     voice: str = 'Jessica',
@@ -733,11 +906,10 @@ def tts_elevenlabs(
     data = r.json()
     audio = data.get('audio') or {}
     url = audio.get('url') or ''
-    duration_ms = (
+    duration_ms = _coerce_duration_ms(
         data.get('duration_ms')
         or audio.get('duration_ms')
         or audio.get('duration')
-        or 0
     )
     if not url:
         error_msg = data.get('error') or data.get('detail') or 'No audio URL'
@@ -748,15 +920,18 @@ def tts_elevenlabs(
             data2 = r2.json()
             audio2 = data2.get('audio') or {}
             fallback_url = audio2.get('url') or ''
-            fallback_duration_ms = (
+            fallback_duration_ms = _coerce_duration_ms(
                 data2.get('duration_ms')
                 or audio2.get('duration_ms')
                 or audio2.get('duration')
-                or 0
             )
             if fallback_url:
+                if fallback_duration_ms <= 0:
+                    fallback_duration_ms = _probe_remote_audio_duration_ms(fallback_url)
                 return {'url': fallback_url, 'duration_ms': fallback_duration_ms}
         raise FALError(error_msg)
+    if duration_ms <= 0:
+        duration_ms = _probe_remote_audio_duration_ms(url)
     return {'url': url, 'duration_ms': duration_ms}
 
 

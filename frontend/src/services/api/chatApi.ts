@@ -108,6 +108,28 @@ export const chatApi = {
       ...(options?.outputFormat != null && options.outputFormat !== '' && { output_format: options.outputFormat }),
       ...(options?.seed != null && { seed: options.seed }),
     }),
+  generateVideoPrompt: (options: {
+    inputConcept: string;
+    style?: string;
+    cameraStyle?: string;
+    cameraDirection?: string;
+    pacing?: string;
+    specialEffects?: string;
+    customElements?: string;
+    promptLength?: 'short' | 'medium' | 'long';
+    model?: string;
+  }) =>
+    api.post<{ prompt: string; model?: string }>('/api/v1/studio/video-prompt/', {
+      input_concept: options.inputConcept,
+      ...(options.style != null && options.style !== '' && { style: options.style }),
+      ...(options.cameraStyle != null && options.cameraStyle !== '' && { camera_style: options.cameraStyle }),
+      ...(options.cameraDirection != null && options.cameraDirection !== '' && { camera_direction: options.cameraDirection }),
+      ...(options.pacing != null && options.pacing !== '' && { pacing: options.pacing }),
+      ...(options.specialEffects != null && options.specialEffects !== '' && { special_effects: options.specialEffects }),
+      ...(options.customElements != null && options.customElements !== '' && { custom_elements: options.customElements }),
+      ...(options.promptLength != null && { prompt_length: options.promptLength }),
+      ...(options.model != null && options.model !== '' && { model: options.model }),
+    }),
   jobStatus: (taskId: string) => api.get<JobStatus>(`/api/v1/chat/job/${taskId}/`),
   cancelJob: (taskId: string) => api.post(`/api/v1/chat/job/${taskId}/cancel/`, {}),
 };

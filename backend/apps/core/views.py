@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 STUDIO_LLM_PROMPT_MAX = 100_000
 STUDIO_LLM_SYSTEM_MAX = 50_000
 STUDIO_IMAGE_PROMPT_MAX = 10_000
+STUDIO_VIDEO_PROMPT_MAX = 12_000
 STUDIO_TTS_TEXT_MAX = 5_000
 STUDIO_RESEARCH_QUERY_MAX = 12_000
 STUDIO_RESEARCH_CONTEXT_MAX = 12_000
@@ -1348,6 +1349,62 @@ def studio_image(request):
 
 
 @csrf_exempt
+@ratelimit(key='ip', rate='20/m', method='POST', block=False)
+@require_http_methods(['POST'])
+def studio_video_prompt(request):
+    """Video prompt builder. POST JSON -> { prompt, model }."""
+    if (r := _check_ratelimit(request)):
+        return r
+    body = _parse_json_body(request)
+    if not body or not isinstance(body.get('input_concept'), str):
+        return JsonResponse({'error': 'input_concept (string) required'}, status=400)
+    try:
+        from apps.ai.fal_client import generate_video_prompt_fal
+        from apps.ai.errors import FALError
+    except ImportError as e:
+        logger.exception('studio_video_prompt import')
+        return JsonResponse({'error': str(e)}, status=503)
+
+    input_concept = (body.get('input_concept') or '').strip()
+    if not input_concept:
+        return JsonResponse({'error': 'input_concept required'}, status=400)
+    if len(input_concept) > STUDIO_VIDEO_PROMPT_MAX:
+        return JsonResponse({'error': f'input_concept는 {STUDIO_VIDEO_PROMPT_MAX}자 이내로 입력해 주세요.'}, status=400)
+
+    prompt_length = (body.get('prompt_length') or 'medium').strip().lower() if isinstance(body.get('prompt_length'), str) else 'medium'
+    if prompt_length not in ('short', 'medium', 'long'):
+        prompt_length = 'medium'
+
+    def _clean_optional_text(key: str, max_length: int = 500) -> str | None:
+        value = body.get(key)
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        return cleaned[:max_length]
+
+    try:
+        result = generate_video_prompt_fal(
+            input_concept,
+            style=_clean_optional_text('style'),
+            camera_style=_clean_optional_text('camera_style'),
+            camera_direction=_clean_optional_text('camera_direction'),
+            pacing=_clean_optional_text('pacing'),
+            special_effects=_clean_optional_text('special_effects'),
+            custom_elements=_clean_optional_text('custom_elements', max_length=1_500),
+            model=_clean_optional_text('model', max_length=120),
+            prompt_length=prompt_length,
+        )
+        return JsonResponse(result)
+    except FALError as e:
+        return JsonResponse({'error': str(e)}, status=502)
+    except Exception as e:
+        logger.exception('studio_video_prompt')
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
 @ratelimit(key='ip', rate='30/m', method='POST', block=False)
 @require_http_methods(['POST'])
 def studio_bg_remove(request):
@@ -1561,6 +1618,75 @@ def studio_export_job_cancel(request, task_id: str):
         return JsonResponse({'status': 'cancelled'})
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@ratelimit(key='ip', rate='12/m', method='POST', block=False)
+@require_http_methods(['POST'])
+def studio_thumbnail_benchmark(request):
+    """
+    Studio Step 9 async thumbnail benchmark.
+    POST JSON: { reference_thumbnail_url, target_topic, aspect_ratio }
+    -> { task_id, job_id }
+    """
+    if (r := _check_ratelimit(request)):
+        return r
+    body = _parse_json_body(request)
+    reference_thumbnail_url = (body.get('reference_thumbnail_url') or '').strip() if isinstance(body.get('reference_thumbnail_url'), str) else ''
+    target_topic = (body.get('target_topic') or '').strip() if isinstance(body.get('target_topic'), str) else ''
+    aspect_ratio = (body.get('aspect_ratio') or '16:9').strip()
+
+    if not reference_thumbnail_url:
+        return JsonResponse({'error': 'reference_thumbnail_url required'}, status=400)
+    if not target_topic:
+        return JsonResponse({'error': 'target_topic required'}, status=400)
+    if aspect_ratio not in ('9:16', '16:9'):
+        aspect_ratio = '16:9'
+
+    try:
+        from apps.chats.models import Session, Job, SESSION_KIND_STUDIO
+        from .tasks import task_studio_thumbnail_benchmark
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=503)
+
+    session = Session.objects.filter(kind=SESSION_KIND_STUDIO).order_by('-updated_at').first()
+    if not session:
+        session = Session.objects.create(kind=SESSION_KIND_STUDIO, title='WEAV Studio')
+
+    job = Job.objects.create(session=session, kind='studio_thumb_bench', status='pending', result={})
+    task = task_studio_thumbnail_benchmark.delay(
+        job.id,
+        reference_thumbnail_url=reference_thumbnail_url,
+        target_topic=target_topic,
+        aspect_ratio=aspect_ratio,
+    )
+    job.task_id = task.id
+    job.save(update_fields=['task_id', 'updated_at'])
+    return JsonResponse({'task_id': task.id, 'job_id': job.id}, status=202)
+
+
+@require_GET
+def studio_thumbnail_benchmark_job_status(request, task_id: str):
+    try:
+        from apps.chats.models import Job
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=503)
+
+    try:
+        job = Job.objects.get(task_id=task_id)
+    except Job.DoesNotExist:
+        return JsonResponse({'error': 'job not found'}, status=404)
+
+    payload = {
+        'task_id': task_id,
+        'job_id': job.id,
+        'kind': job.kind,
+        'status': job.status,
+        'result': job.result or {},
+    }
+    if job.status == 'failure':
+        payload['error'] = job.error_message
+    return JsonResponse(payload)
 
 
 @csrf_exempt

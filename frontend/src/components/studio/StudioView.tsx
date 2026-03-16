@@ -19,6 +19,8 @@ import {
 	type StudioTopicSuggestion,
 	type StudioTopicGenerationBasis,
 	type StudioVisualReferenceAsset,
+	type StudioExportJobState,
+	type StudioThumbnailBenchmarkJobState,
 	  type StudioReferenceMode,
 	  type StudioReferenceState,
 	  type StudioReferenceView,
@@ -27,9 +29,9 @@ import {
 	  analyzeUrlPattern, generateTopics, generatePlanningStep, 
 	  rewritePlanningStep, generateMasterPlan, splitMasterPlanToSteps,
 	  synthesizeMasterScript, splitScriptIntoScenes, generateSceneImage,
-	  analyzeReferenceImage, generateScenePrompt, generateMetaData, generateBenchmarkThumbnail, translateToKorean, translateToEnglish
+	  analyzeReferenceImage, generateScenePrompt, generateMetaData, translateToKorean, translateToEnglish
 	} from '@/services/studio/geminiService';
-import { studioTts, studioImage, uploadStudioReferenceImage, studioExport, studioExportJobStatus, studioExportJobCancel } from '@/services/studio/studioFalApi';
+import { studioTts, studioImage, uploadStudioReferenceImage, studioExport, studioExportJobStatus, studioExportJobCancel, studioThumbnailBenchmark, studioThumbnailBenchmarkJobStatus } from '@/services/studio/studioFalApi';
 import { fetchTrendingByCategory, formatTrendingGrowth, type TrendingItemWithCategory } from '@/services/studio/trendingApi';
 import { InputDialog } from '@/components/ui/InputDialog';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
@@ -155,6 +157,23 @@ const createDefaultAnalysisResult = (): StudioAnalysisResult => ({
   isUrlAnalyzing: false,
 });
 
+const createDefaultExportJobState = (): StudioExportJobState => ({
+  taskId: null,
+  status: 'idle',
+  error: null,
+  resultVideoUrl: null,
+  resultSrtUrl: null,
+  resultVttUrl: null,
+});
+
+const createDefaultThumbnailBenchmarkJobState = (): StudioThumbnailBenchmarkJobState => ({
+  taskId: null,
+  status: 'idle',
+  error: null,
+  resultImageUrl: null,
+  resultAnalysisSummary: null,
+});
+
 	const GlobalProvider: React.FC<{ children: React.ReactNode; sessionId?: number }> = ({ children, sessionId }) => {
 	  const storageKey = sessionId != null ? `${STORAGE_KEY_PREFIX}_${sessionId}` : STORAGE_KEY_PREFIX;
 	  const stored = useMemo(() => loadStoredStudio(storageKey), [storageKey]);
@@ -253,6 +272,33 @@ const createDefaultAnalysisResult = (): StudioAnalysisResult => ({
 	  const [subtitlesEnabled, setSubtitlesEnabled] = useState(() => (typeof stored?.subtitlesEnabled === 'boolean') ? stored.subtitlesEnabled : true);
 	  const [burnInSubtitles, setBurnInSubtitles] = useState(() => (typeof stored?.burnInSubtitles === 'boolean') ? stored.burnInSubtitles : false);
 	  const [videoUrl, setVideoUrl] = useState<string | null>(() => (typeof stored?.videoUrl === 'string' && stored.videoUrl) ? stored.videoUrl : null);
+	  const [exportJob, setExportJob] = useState<StudioExportJobState>(() => {
+	    const def = createDefaultExportJobState();
+	    const raw = stored?.exportJob;
+	    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return def;
+	    const obj = raw as Record<string, unknown>;
+	    return {
+	      taskId: typeof obj.taskId === 'string' && obj.taskId.trim() ? obj.taskId : null,
+	      status: obj.status === 'pending' || obj.status === 'running' || obj.status === 'success' || obj.status === 'failure' ? obj.status : def.status,
+	      error: typeof obj.error === 'string' && obj.error.trim() ? obj.error : null,
+	      resultVideoUrl: typeof obj.resultVideoUrl === 'string' && obj.resultVideoUrl.trim() ? obj.resultVideoUrl : null,
+	      resultSrtUrl: typeof obj.resultSrtUrl === 'string' && obj.resultSrtUrl.trim() ? obj.resultSrtUrl : null,
+	      resultVttUrl: typeof obj.resultVttUrl === 'string' && obj.resultVttUrl.trim() ? obj.resultVttUrl : null,
+	    };
+	  });
+	  const [thumbnailBenchmarkJob, setThumbnailBenchmarkJob] = useState<StudioThumbnailBenchmarkJobState>(() => {
+	    const def = createDefaultThumbnailBenchmarkJobState();
+	    const raw = stored?.thumbnailBenchmarkJob;
+	    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return def;
+	    const obj = raw as Record<string, unknown>;
+	    return {
+	      taskId: typeof obj.taskId === 'string' && obj.taskId.trim() ? obj.taskId : null,
+	      status: obj.status === 'pending' || obj.status === 'running' || obj.status === 'success' || obj.status === 'failure' ? obj.status : def.status,
+	      error: typeof obj.error === 'string' && obj.error.trim() ? obj.error : null,
+	      resultImageUrl: typeof obj.resultImageUrl === 'string' && obj.resultImageUrl.trim() ? obj.resultImageUrl : null,
+	      resultAnalysisSummary: typeof obj.resultAnalysisSummary === 'string' && obj.resultAnalysisSummary.trim() ? obj.resultAnalysisSummary : null,
+	    };
+	  });
 	  const [metaTitle, setMetaTitle] = useState(() => (typeof stored?.metaTitle === 'string') ? stored.metaTitle : '');
 	  const [metaDescription, setMetaDescription] = useState(() => (typeof stored?.metaDescription === 'string') ? stored.metaDescription : '');
 	  const [metaPinnedComment, setMetaPinnedComment] = useState(() => (typeof stored?.metaPinnedComment === 'string') ? stored.metaPinnedComment : '');
@@ -310,7 +356,7 @@ const createDefaultAnalysisResult = (): StudioAnalysisResult => ({
             referenceState,
 			      selectedBenchmarkPatterns,
 			      selectedVoicePresetId, subtitlesEnabled, burnInSubtitles,
-			      videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData
+			      videoUrl, exportJob, thumbnailBenchmarkJob, metaTitle, metaDescription, metaPinnedComment, thumbnailData
 		    };
 	    localStorage.setItem(storageKey, JSON.stringify(data));
 	  }, [
@@ -319,11 +365,113 @@ const createDefaultAnalysisResult = (): StudioAnalysisResult => ({
 	    descriptionInput, topicGenerationBasis, scenes, sceneDurations, scriptStyle, customScriptStyleText, scriptLength, planningData,
 	    selectedTopic, finalTopic, generatedTopics, masterPlan, masterScript, selectedStyle,
 		    referenceImage, referenceImageUrl, useVisualReferencesInSceneGeneration, visualReferenceAssets, analyzedStylePrompt, analyzedStylePromptKo,
-        referenceState,
+		    referenceState,
 		    selectedBenchmarkPatterns,
 		    selectedVoicePresetId, subtitlesEnabled, burnInSubtitles,
-		    videoUrl, metaTitle, metaDescription, metaPinnedComment, thumbnailData
+		    videoUrl, exportJob, thumbnailBenchmarkJob, metaTitle, metaDescription, metaPinnedComment, thumbnailData
 		  ]);
+
+  useEffect(() => {
+    if (!exportJob.taskId) return;
+    if (exportJob.status !== 'pending' && exportJob.status !== 'running') return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const status = await studioExportJobStatus(exportJob.taskId as string);
+        if (cancelled) return;
+        setExportJob((prev) => {
+          if (prev.taskId !== status.task_id) return prev;
+          return {
+            ...prev,
+            status: status.status,
+            error: status.status === 'failure' ? (status.error || '렌더링 실패') : null,
+            resultVideoUrl: status.result?.video_url || prev.resultVideoUrl,
+            resultSrtUrl: (status.result?.captions as any)?.srt_url || prev.resultSrtUrl,
+            resultVttUrl: (status.result?.captions as any)?.vtt_url || prev.resultVttUrl,
+          };
+        });
+        if (status.status === 'success') {
+          setVideoUrl(status.result?.video_url || null);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setExportJob((prev) => (
+          prev.taskId === exportJob.taskId
+            ? { ...prev, status: 'failure', error: error instanceof Error ? error.message : '상태 조회 실패' }
+            : prev
+        ));
+      }
+    };
+    tick();
+    const intervalId = window.setInterval(tick, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [exportJob.taskId, exportJob.status, setVideoUrl]);
+
+  useEffect(() => {
+    if (exportJob.status === 'success' && exportJob.resultVideoUrl && videoUrl !== exportJob.resultVideoUrl) {
+      setVideoUrl(exportJob.resultVideoUrl);
+    }
+  }, [exportJob.status, exportJob.resultVideoUrl, videoUrl, setVideoUrl]);
+
+  useEffect(() => {
+    if (!thumbnailBenchmarkJob.taskId) return;
+    if (thumbnailBenchmarkJob.status !== 'pending' && thumbnailBenchmarkJob.status !== 'running') return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const status = await studioThumbnailBenchmarkJobStatus(thumbnailBenchmarkJob.taskId as string);
+        if (cancelled) return;
+        setThumbnailBenchmarkJob((prev) => {
+          if (prev.taskId !== status.task_id) return prev;
+          return {
+            ...prev,
+            status: status.status,
+            error: status.status === 'failure' ? (status.error || '썸네일 벤치마킹 실패') : null,
+            resultImageUrl: status.result?.image_url || prev.resultImageUrl,
+            resultAnalysisSummary: status.result?.analysis_summary || prev.resultAnalysisSummary,
+          };
+        });
+      } catch (error) {
+        if (cancelled) return;
+        setThumbnailBenchmarkJob((prev) => (
+          prev.taskId === thumbnailBenchmarkJob.taskId
+            ? { ...prev, status: 'failure', error: error instanceof Error ? error.message : '상태 조회 실패' }
+            : prev
+        ));
+      }
+    };
+    tick();
+    const intervalId = window.setInterval(tick, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [thumbnailBenchmarkJob.taskId, thumbnailBenchmarkJob.status]);
+
+  useEffect(() => {
+    if (thumbnailBenchmarkJob.status !== 'success' || !thumbnailBenchmarkJob.taskId || !thumbnailBenchmarkJob.resultImageUrl) return;
+    const nextId = `bench-${thumbnailBenchmarkJob.taskId}`;
+    setThumbnailData((prev) => {
+      const base = (prev.thumbnails?.length ?? 0) > 0 ? prev.thumbnails : MOCK_THUMBNAILS;
+      const existingIndex = base.findIndex((item: any) => item?.id === nextId);
+      const nextThumb = {
+        id: nextId,
+        title: '벤치마킹 썸네일',
+        imageUrl: thumbnailBenchmarkJob.resultImageUrl || undefined,
+        ctrHint: '레퍼런스 분석 기반 생성',
+        isSelected: existingIndex === -1,
+      };
+      if (existingIndex >= 0) {
+        const updated = [...base];
+        updated[existingIndex] = { ...updated[existingIndex], ...nextThumb };
+        return { ...prev, thumbnails: updated };
+      }
+      return { ...prev, thumbnails: [...base, nextThumb] };
+    });
+  }, [thumbnailBenchmarkJob.status, thumbnailBenchmarkJob.taskId, thumbnailBenchmarkJob.resultImageUrl, setThumbnailData]);
 
   const resetStudioProject = useCallback(() => {
     try {
@@ -369,6 +517,8 @@ const createDefaultAnalysisResult = (): StudioAnalysisResult => ({
     setSubtitlesEnabled(true);
     setBurnInSubtitles(false);
     setVideoUrl(null);
+    setExportJob(createDefaultExportJobState());
+    setThumbnailBenchmarkJob(createDefaultThumbnailBenchmarkJobState());
     setMetaTitle('');
     setMetaDescription('');
     setMetaPinnedComment('');
@@ -416,6 +566,8 @@ const createDefaultAnalysisResult = (): StudioAnalysisResult => ({
 	    subtitlesEnabled, setSubtitlesEnabled,
 	    burnInSubtitles, setBurnInSubtitles,
 	    videoUrl, setVideoUrl,
+      exportJob, setExportJob,
+	    thumbnailBenchmarkJob, setThumbnailBenchmarkJob,
 	    metaTitle, setMetaTitle,
 	    metaDescription, setMetaDescription,
 	    metaPinnedComment, setMetaPinnedComment,
@@ -442,36 +594,38 @@ const AutoResizeTextarea: React.FC<{
   collapsible?: boolean;
   collapseThreshold?: number;
   collapseTitle?: string;
+  collapseHeaderMode?: 'default' | 'minimal';
+  headerLabel?: string;
+  headerAction?: React.ReactNode;
+  alwaysCollapsible?: boolean;
+  forceShowCollapseHeader?: boolean;
   expandedOverride?: boolean;
   onExpandedChange?: (next: boolean) => void;
   readOnly?: boolean;
-}> = ({ value, onChange, placeholder, isHighlighted, className, collapsible = false, collapseThreshold = 260, collapseTitle = '생성된 내용', expandedOverride, onExpandedChange, readOnly = false }) => {
+}> = ({ value, onChange, placeholder, isHighlighted, className, collapsible = false, collapseThreshold = 260, collapseTitle = '생성된 내용', collapseHeaderMode = 'default', headerLabel, headerAction, alwaysCollapsible = false, forceShowCollapseHeader = false, expandedOverride, onExpandedChange, readOnly = false }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const trimmedValue = value.trim();
-  const shouldCollapse = collapsible && trimmedValue.length > collapseThreshold;
+  const shouldCollapse = collapsible && (alwaysCollapsible || trimmedValue.length > collapseThreshold);
   const [isExpanded, setIsExpanded] = useState(() => !shouldCollapse);
   const [contentHeight, setContentHeight] = useState(0);
   const hasManualToggleRef = useRef(false);
   const prevLengthRef = useRef(trimmedValue.length);
   const isControlled = typeof expandedOverride === 'boolean';
   const expanded = isControlled ? expandedOverride : isExpanded;
-  useEffect(() => {
-    if (!textareaRef.current || (shouldCollapse && !expanded)) return;
-    const rafId = requestAnimationFrame(() => {
-      if (!textareaRef.current) return;
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-    });
-    return () => cancelAnimationFrame(rafId);
-  }, [expanded, shouldCollapse, value]);
-
   useLayoutEffect(() => {
-    if (!contentRef.current) return;
+    const textarea = textareaRef.current;
+    const content = contentRef.current;
+    if (!textarea || !content) return;
+
     const rafId = requestAnimationFrame(() => {
-      if (!contentRef.current) return;
-      setContentHeight(contentRef.current.scrollHeight);
+      textarea.style.height = 'auto';
+      const textareaHeight = textarea.scrollHeight;
+      textarea.style.height = `${textareaHeight}px`;
+      const measuredContentHeight = Math.max(content.scrollHeight, textareaHeight);
+      setContentHeight(measuredContentHeight + 2);
     });
+
     return () => cancelAnimationFrame(rafId);
   }, [expanded, shouldCollapse, value]);
 
@@ -509,16 +663,32 @@ const AutoResizeTextarea: React.FC<{
 
   return (
     <div className={`${isHighlighted ? 'ring-2 ring-primary/60 rounded-2xl' : ''}`}>
-      {shouldCollapse && expanded && (
-        <div className="mb-2 flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/35 px-3 py-2">
-          <div className="text-xs text-slate-400">{collapseTitle}</div>
-          <button
-            type="button"
-            onClick={toggleExpanded}
-            className="ui-btn ui-btn--ghost text-xs shrink-0"
-          >
-            {expanded ? '△ 접기' : '▽ 펼치기'}
-          </button>
+      {(shouldCollapse || forceShowCollapseHeader) && (
+        <div className={collapseHeaderMode === 'minimal'
+          ? 'mb-2 flex items-center justify-between gap-3'
+          : 'mb-2 flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/35 px-3 py-2'
+        }>
+          {collapseHeaderMode === 'default' ? (
+            <div className="text-xs text-slate-400">{collapseTitle}</div>
+          ) : headerLabel || headerAction ? (
+            <div className="flex min-w-0 items-center gap-2">
+              {headerLabel ? <div className="ui-label">{headerLabel}</div> : null}
+              {headerAction}
+            </div>
+          ) : (
+            <div />
+          )}
+          {shouldCollapse ? (
+            <button
+              type="button"
+              onClick={toggleExpanded}
+              className={`ui-btn ui-btn--ghost text-xs shrink-0 ${collapseHeaderMode === 'minimal' ? '!px-0 !py-0 min-h-0 h-auto' : ''}`}
+            >
+              {expanded ? '△ 접기' : '▽ 펼치기'}
+            </button>
+          ) : collapseHeaderMode === 'default' ? (
+            <div className="w-16" />
+          ) : null}
         </div>
       )}
       <div
@@ -1233,17 +1403,11 @@ const TopicAnalysisStep = ({ showToast }: { showToast: (msg: string) => void }) 
                               }`}
                             >
                               <div className="flex items-start gap-3">
-                                {parsedPattern.time ? (
-                                  <span className={`mt-0.5 shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${
-                                    isSelected
-                                      ? 'border-primary/45 bg-primary/18 text-slate-100'
-                                      : 'border-border/70 bg-secondary/50 text-slate-300'
-                                  }`}>
-                                    {parsedPattern.time}
-                                  </span>
-                                ) : (
-                                  <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${isSelected ? 'bg-primary' : 'bg-slate-500/80'}`} />
-                                )}
+                                <span
+                                  className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full transition-colors ${
+                                    isSelected ? 'bg-primary ring-4 ring-primary/15' : 'bg-slate-500/80'
+                                  }`}
+                                />
                                 <div className="min-w-0 flex-1">
                                   <div className={`text-sm leading-6 ${isSelected ? 'text-slate-100' : 'text-slate-200'}`}>
                                     {parsedPattern.body}
@@ -1460,7 +1624,6 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
   const [loadingStepKey, setLoadingStepKey] = useState<string | null>(null);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
   const [synthesizeProgress, setSynthesizeProgress] = useState<string | null>(null); 
-  const [isPlanningBlocksExpanded, setIsPlanningBlocksExpanded] = useState(false);
 
   const archetypes = [
     { id: 'type-a', name: '내러티브 중심형', desc: '이야기의 흐름을 따라가는 몰입형 스토리', icon: <AlignLeft size={18} /> },
@@ -1576,6 +1739,7 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
         style: styleLabelForPrompt,
         styleRules: styleRulesForPrompt,
         length: scriptLength,
+        targetDuration: planningData.targetDuration,
         masterPlanText: masterPlan,
         planningData,
         benchmarkSummary: benchmarkSummaryForPrompt,
@@ -1602,6 +1766,8 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
         topic: topicForPlanning,
         style: styleLabelForPrompt,
         styleRules: styleRulesForPrompt,
+        length: scriptLength,
+        targetDuration: planningData.targetDuration,
         currentText,
         mode,
         instruction,
@@ -1628,6 +1794,7 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
         style: styleLabelForPrompt,
         styleRules: styleRulesForPrompt,
         length: scriptLength,
+        targetDuration: planningData.targetDuration,
         benchmarkSummary: benchmarkSummaryForPrompt,
         benchmarkPatterns: benchmarkPatternsForPrompt,
         existingMasterPlan: masterPlan,
@@ -1870,8 +2037,6 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
                 collapsible
                 collapseThreshold={220}
                 collapseTitle="대단원 기획안"
-                expandedOverride={isPlanningBlocksExpanded}
-                onExpandedChange={setIsPlanningBlocksExpanded}
 	            />
 	          </div>
 
@@ -1938,8 +2103,6 @@ const ScriptPlanningStep = ({ showToast }: { showToast: (msg: string) => void })
                 collapsible
                 collapseThreshold={220}
                 collapseTitle={s.name}
-                expandedOverride={isPlanningBlocksExpanded}
-                onExpandedChange={setIsPlanningBlocksExpanded}
               />
             </div>
           ))}
@@ -2495,22 +2658,22 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   }, [buildRandomNickname, pickMany, pickOne, randomCharacterSeedSets, referenceState.mode, setReferenceState, showToast, styleBasePresets, styleOptionGroups]);
 
   const downloadReferenceZip = useCallback(async () => {
+    const nickname = (referenceState.nickname || 'character').trim() || 'character';
+    const safeBaseName = nickname.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'character';
     const zipItems: Array<{ url: string; label: string }> = [];
     if (gridCutoutUrls.length > 0) {
       gridCutoutUrls.forEach((url, idx) => {
-        zipItems.push({ url, label: `${String(idx + 1).padStart(2, '0')}_reference` });
+        zipItems.push({ url, label: `${safeBaseName}${idx + 1}` });
       });
     } else if (referenceImageUrl) {
-      zipItems.push({ url: referenceImageUrl, label: '01_reference' });
+      zipItems.push({ url: referenceImageUrl, label: `${safeBaseName}1` });
     }
 
     if (zipItems.length === 0) {
       showToast('다운로드할 레퍼런스 이미지가 없습니다.');
       return;
     }
-    const nickname = (referenceState.nickname || 'character').trim() || 'character';
-    const safeNickname = nickname.replace(/[^a-zA-Z0-9_-]+/g, '_');
-    const zipName = `weav_reference_${safeNickname}.zip`;
+    const zipName = `${safeBaseName}.zip`;
 
     const guessExt = (url: string, mime: string | undefined) => {
       const type = (mime || '').toLowerCase();
@@ -2525,7 +2688,7 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
     setIsZipDownloading(true);
     try {
       const zip = new JSZip();
-      const folder = zip.folder(`weav_reference_${safeNickname}`) ?? zip;
+      const folder = zip.folder(safeBaseName) ?? zip;
       for (let i = 0; i < zipItems.length; i += 1) {
         const targetUrl = zipItems[i].url;
         const res = await fetch(targetUrl);
@@ -2669,7 +2832,7 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
         aspect_ratio: '9:16',
         num_images: 1,
         ...(referenceForTile ? { reference_image_url: referenceForTile, image_urls: [referenceForTile] } : {}),
-        resolution: '4K',
+        resolution: '1K',
         output_format: 'png',
         limit_generations: true,
       });
@@ -3112,7 +3275,6 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const hasPreview = gridCutoutUrls.length > 0;
   const hasPreviewForCurrentMode = hasPreview && referenceState.metadata?.generated_mode === mode;
   const hasVisualReferencesForStep5 = visualReferenceAssets.length > 0;
-  const showVisualReferenceUploadCard = isExistingReferenceMode || (mode === 'RESTYLE_REFERENCE' && hasPreviewForCurrentMode);
   const canDownloadReferenceMetadata =
     (mode === 'GENERATE_NEW' || mode === 'RESTYLE_REFERENCE') &&
     !!referenceState.metadata &&
@@ -3575,66 +3737,6 @@ const ReferenceStep = ({ showToast }: { showToast: (msg: string) => void }) => {
                 {isRefStyleAnalyzing
                   ? '업로드는 완료되었고, 현재 스타일 분석을 마무리하고 있습니다.'
                   : '업로드 URL이 저장되었습니다. (Step 5 비주얼 생성 시 레퍼런스로 사용)'}
-              </div>
-            )}
-          </div>
-        )}
-
-        {showVisualReferenceUploadCard && (
-          <div className="ui-card space-y-4">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <span className="ui-label">비주얼 스탭에서 사용할 래퍼런스 업로드하기 (최대 10장 이미지 첨부 가능)</span>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {isExistingReferenceMode
-                    ? '이미 보유한 캐릭터/아바타 레퍼런스를 올리면 Step 5 비주얼 생성 시 이 이미지를 그대로 참고합니다.'
-                    : '생성된 턴어라운드 외에 추가 참고 이미지가 있으면 같이 올려서 Step 5 비주얼 생성에 함께 반영할 수 있습니다.'}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => visualReferenceInputRef.current?.click()}
-                disabled={isVisualReferenceUploading || visualReferenceAssets.length >= MAX_VISUAL_REFERENCE_UPLOADS}
-                className="ui-btn ui-btn--secondary shrink-0"
-              >
-                {isVisualReferenceUploading ? <><Loader2 size={14} className="animate-spin" /> 업로드 중...</> : <><ImagePlus size={14} /> 래퍼런스 추가</>}
-              </button>
-            </div>
-            <input
-              ref={visualReferenceInputRef}
-              type="file"
-              className="hidden"
-              accept="image/*"
-              multiple
-              onChange={(e) => {
-                if (e.target.files?.length) {
-                  void handleVisualReferenceUpload(e.target.files);
-                  e.target.value = '';
-                }
-              }}
-            />
-            {visualReferenceAssets.length > 0 ? (
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                {visualReferenceAssets.map((asset, idx) => (
-                  <div key={asset.id} className="rounded-2xl border border-border/60 bg-secondary/20 p-2">
-                    <div className="relative aspect-square overflow-hidden rounded-xl bg-slate-100">
-                      <img src={asset.url} alt={asset.name || `reference ${idx + 1}`} className="h-full w-full object-cover" />
-                      <button
-                        type="button"
-                        onClick={() => setVisualReferenceAssets((prev) => prev.filter((item) => item.id !== asset.id))}
-                        className="absolute right-2 top-2 rounded-full bg-black/65 p-1 text-white"
-                        aria-label={`${asset.name || `reference ${idx + 1}`} 삭제`}
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                    <div className="mt-2 truncate text-xs text-slate-600">{asset.name || `reference_${idx + 1}`}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-border/70 bg-secondary/20 px-4 py-5 text-sm text-slate-500">
-                최대 10장까지 업로드할 수 있습니다. 업로드한 레퍼런스는 Step 5 모든 씬 이미지 생성에 함께 참고됩니다.
               </div>
             )}
           </div>
@@ -4106,10 +4208,12 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
     if (!masterScript) return showToast("시나리오 데이터가 없습니다. 3단계에서 시나리오를 먼저 생성하세요.");
     setIsSplitting(true);
     try {
+      setScenes([]);
       const splitRes = await splitScriptIntoScenes(masterScript);
-      const mapped = splitRes.map((s: any, i: number) => ({
+      const mapped = splitRes
+        .map((s: any, i: number) => ({
         id: Date.now() + i,
-        narrative: s.script_segment,
+        narrative: (s.script_segment || '').trim(),
         aiPrompt: s.scene_description,
         aiPromptKo: '',
         imageUrl: '',
@@ -4118,8 +4222,12 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
         isPromptVisible: true,
         isSyncing: false,
         isGenerating: false
-      }));
-      setScenes(mapped);
+      }))
+        .filter((scene) => scene.narrative.length > 0);
+
+      if (mapped.length === 0) {
+        throw new Error('scene split result empty');
+      }
 
       const styleObj = styleLab.find(s => s.id === selectedStyle);
       for (let i = 0; i < mapped.length; i++) {
@@ -4162,13 +4270,32 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
     const current = promptTranslateTimersRef.current[sceneId];
     if (current) window.clearTimeout(current);
     const trimmed = (englishPrompt || '').trim();
-    if (!trimmed) return;
-    promptTranslateTimersRef.current[sceneId] = window.setTimeout(async () => {
-      const ko = await translateToKorean(trimmed);
-      if (!ko) return;
+    if (!trimmed) {
       setScenes((prev) =>
-        prev.map((p) => (p.id === sceneId && p.aiPrompt.trim() === trimmed ? { ...p, aiPromptKo: ko } : p))
+        prev.map((p) => (p.id === sceneId ? { ...p, aiPromptKo: '', isSyncing: false } : p))
       );
+      return;
+    }
+    setScenes((prev) =>
+      prev.map((p) => (p.id === sceneId ? { ...p, aiPromptKo: '', isSyncing: true } : p))
+    );
+    promptTranslateTimersRef.current[sceneId] = window.setTimeout(async () => {
+      try {
+        const ko = await translateToKorean(trimmed);
+        setScenes((prev) =>
+          prev.map((p) =>
+            p.id === sceneId && p.aiPrompt.trim() === trimmed
+              ? { ...p, aiPromptKo: ko || '', isSyncing: false }
+              : p.id === sceneId
+                ? { ...p, isSyncing: false }
+                : p
+          )
+        );
+      } catch {
+        setScenes((prev) =>
+          prev.map((p) => (p.id === sceneId ? { ...p, isSyncing: false } : p))
+        );
+      }
     }, 1200);
   }, [setScenes]);
 
@@ -4313,69 +4440,14 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                  <div className="lg:col-span-2 space-y-4">
-                    <div className="space-y-2">
-                      <span className="ui-label">대본</span>
-                      <AutoResizeTextarea
-                        value={scene.narrative}
-                        onChange={v => { const n = [...scenes]; n[idx].narrative = v; setScenes(n); }}
-                        placeholder="대본 조각을 입력하세요..."
-                        className="min-h-[120px] text-base font-semibold"
-                        collapsible
-                        collapseThreshold={120}
-                        collapseTitle={`StudioScene ${String(idx + 1).padStart(2, '0')} 대본`}
-                      />
-                    </div>
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="ui-label">프롬프트 / 번역</span>
-                        <button
-                          onClick={async () => {
-                            const ko = await translateToKorean(scene.aiPrompt);
-                            if (!ko) return;
-                            const n = [...scenes];
-                            n[idx].aiPromptKo = ko;
-                            setScenes(n);
-                          }}
-                          className="ui-btn ui-btn--ghost"
-                        >
-                          KO 번역
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <span className="ui-label">프롬프트 (EN)</span>
-                          <AutoResizeTextarea
-                            value={scene.aiPrompt}
-                            onChange={v => {
-                              const n = [...scenes];
-                              n[idx].aiPrompt = v;
-                              n[idx].aiPromptKo = '';
-                              setScenes(n);
-                              scheduleScenePromptTranslate(scene.id, v);
-                            }}
-                            placeholder="장면 연출 설명을 입력하세요..."
-                            className="min-h-[160px] text-sm"
-                            collapsible
-                            collapseThreshold={120}
-                            collapseTitle={`StudioScene ${String(idx + 1).padStart(2, '0')} 프롬프트`}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <span className="ui-label">KO 번역</span>
-                          <AutoResizeTextarea
-                            value={scene.aiPromptKo || '번역이 아직 없습니다.'}
-                            onChange={() => {}}
-                            placeholder="번역이 아직 없습니다."
-                            className="min-h-[160px] text-sm"
-                            collapsible
-                            collapseThreshold={120}
-                            collapseTitle={`StudioScene ${String(idx + 1).padStart(2, '0')} 번역`}
-                            readOnly
-                          />
-                        </div>
-                      </div>
-                    </div>
+                  <div className="lg:col-span-2 space-y-2">
+                    <span className="ui-label">대본</span>
+                    <AutoResizeTextarea
+                      value={scene.narrative}
+                      onChange={v => { const n = [...scenes]; n[idx].narrative = v; setScenes(n); }}
+                      placeholder="대본 조각을 입력하세요..."
+                      className="min-h-[140px] text-base font-semibold"
+                    />
                   </div>
 
                   <div className="space-y-3">
@@ -4395,6 +4467,80 @@ const ImageAndScriptStep = ({ showToast }: { showToast: (msg: string) => void })
                       {scene.isGenerating ? <><Loader2 size={14} className="animate-spin" /> 생성 중...</> : <><Wand2 size={14} /> {styleLab.find(s => s.id === selectedStyle)?.name} 생성</>}
                     </button>
                   </div>
+                </div>
+
+                <div className="ui-card--muted rounded-2xl p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <span className="ui-label">프롬프트</span>
+                    <div className="inline-flex rounded-full border border-border/70 bg-card/55 p-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const n = [...scenes];
+                          n[idx].isPromptVisible = true;
+                          setScenes(n);
+                        }}
+                        className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${scene.isPromptVisible ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        영어 프롬프트
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const n = [...scenes];
+                          n[idx].isPromptVisible = false;
+                          setScenes(n);
+                        }}
+                        className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${!scene.isPromptVisible ? 'bg-primary text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        한국어 프롬프트
+                      </button>
+                    </div>
+                  </div>
+                  {scene.isPromptVisible ? (
+                    <AutoResizeTextarea
+                      value={scene.aiPrompt}
+                      onChange={v => {
+                        const n = [...scenes];
+                        n[idx].aiPrompt = v;
+                        n[idx].aiPromptKo = '';
+                        setScenes(n);
+                        scheduleScenePromptTranslate(scene.id, v);
+                      }}
+                      placeholder="장면 연출 설명을 입력하세요..."
+                      className="min-h-[220px] text-sm"
+                      collapsible
+                      collapseThreshold={140}
+                      collapseTitle={`StudioScene ${String(idx + 1).padStart(2, '0')} 프롬프트`}
+                      collapseHeaderMode="minimal"
+                      headerLabel="영어 프롬프트"
+                      alwaysCollapsible
+                      forceShowCollapseHeader
+                    />
+                  ) : (
+                    <div className="space-y-2">
+                      {scene.isSyncing && (
+                        <div className="flex items-center justify-end gap-2 text-xs text-slate-500">
+                          <Loader2 size={12} className="animate-spin" />
+                          번역중입니다...
+                        </div>
+                      )}
+                      <AutoResizeTextarea
+                        value={scene.aiPromptKo || ''}
+                        onChange={() => {}}
+                        placeholder={scene.isSyncing ? '번역중입니다...' : '번역이 아직 없습니다.'}
+                        className="min-h-[220px] text-sm"
+                        collapsible
+                        collapseThreshold={140}
+                        collapseTitle={`StudioScene ${String(idx + 1).padStart(2, '0')} 번역`}
+                        collapseHeaderMode="minimal"
+                        headerLabel="한국어 프롬프트"
+                        alwaysCollapsible
+                        forceShowCollapseHeader
+                        readOnly
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             ))
@@ -4489,6 +4635,7 @@ const VoiceStep = () => {
   const [segments, setSegments] = useState<VoiceSegment[]>([]);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [samplePlaying, setSamplePlaying] = useState(false);
+  const durationProbeCacheRef = useRef<Record<number, string>>({});
 
   const selectedVoice = VOICE_PRESETS.find(v => v.id === selectedVoicePresetId) ?? VOICE_PRESETS[0];
 
@@ -4520,6 +4667,61 @@ const VoiceStep = () => {
     [segments]
   );
 
+  const syncSegmentDuration = useCallback((sceneId: number, durationSec: number) => {
+    const safeDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : 0;
+    if (!safeDuration) return;
+    setSegments((prev) =>
+      prev.map((seg) => (seg.id === sceneId && (!seg.durationSec || seg.durationSec <= 0)
+        ? { ...seg, durationSec: safeDuration }
+        : seg))
+    );
+    setScenes((prev) => {
+      const next = prev.map((scene) =>
+        scene.id === sceneId && (!(scene.durationSec && scene.durationSec > 0))
+          ? { ...scene, durationSec: safeDuration, audioDurationSec: safeDuration, duration: safeDuration }
+          : scene
+      );
+      setSceneDurations(next.map((scene) => (scene.durationSec ?? scene.audioDurationSec ?? 0) || 0));
+      return next;
+    });
+  }, [setSceneDurations, setScenes]);
+
+  useEffect(() => {
+    const cleanups: Array<() => void> = [];
+    segments.forEach((seg) => {
+      if (!seg.audioUrl || (seg.durationSec && seg.durationSec > 0)) return;
+      if (durationProbeCacheRef.current[seg.id] === seg.audioUrl) return;
+      durationProbeCacheRef.current[seg.id] = seg.audioUrl;
+
+      const probe = new Audio();
+      probe.preload = 'metadata';
+      probe.src = seg.audioUrl;
+
+      const handleLoaded = () => {
+        if (Number.isFinite(probe.duration) && probe.duration > 0) {
+          syncSegmentDuration(seg.id, probe.duration);
+        }
+      };
+      const handleError = () => {
+        delete durationProbeCacheRef.current[seg.id];
+      };
+
+      probe.addEventListener('loadedmetadata', handleLoaded);
+      probe.addEventListener('error', handleError);
+      probe.load();
+
+      cleanups.push(() => {
+        probe.removeEventListener('loadedmetadata', handleLoaded);
+        probe.removeEventListener('error', handleError);
+        probe.src = '';
+      });
+    });
+
+    return () => {
+      cleanups.forEach((cleanup) => cleanup());
+    };
+  }, [segments, syncSegmentDuration]);
+
   const handleSynthesizeAll = async () => {
     const voice = selectedVoice?.voice ?? 'Jessica';
     setIsSynthesizing(true);
@@ -4544,6 +4746,12 @@ const VoiceStep = () => {
             style: selectedVoice?.style ?? 0.2,
             ...(previousText ? { previous_text: previousText } : {}),
             ...(nextText ? { next_text: nextText } : {}),
+          });
+          console.log('[WEAV Studio][TTS][fal response]', {
+            sceneIndex: i + 1,
+            voice,
+            text,
+            result: { url, duration_ms },
           });
           setSegments(prev => prev.map((p, j) =>
             j === i ? { ...p, status: 'done' as const, audioUrl: url, durationSec: duration_ms / 1000 } : p
@@ -4592,6 +4800,7 @@ const VoiceStep = () => {
     }
   };
   const canMoveToVideoStep = segments.length > 0 && segments.every((seg) => !!seg.audioUrl);
+  const canSkipToVideoStep = segments.length > 0;
   const moveToVideoDisabledReason = useMemo(() => {
     if (canMoveToVideoStep) return '';
     if (segments.length === 0) {
@@ -4599,6 +4808,10 @@ const VoiceStep = () => {
     }
     return '모든 씬의 음성 합성이 완료되어야 7 영상 진행하기가 활성화됩니다. 먼저 전체 합성을 완료해 주세요.';
   }, [canMoveToVideoStep, segments.length]);
+  const skipToVideoDisabledReason = useMemo(() => {
+    if (canSkipToVideoStep) return '';
+    return '먼저 Step 5에서 씬을 만든 뒤에만 TTS 생성을 건너뛰고 7 영상으로 이동할 수 있습니다.';
+  }, [canSkipToVideoStep]);
 
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
@@ -4644,7 +4857,7 @@ const VoiceStep = () => {
 
         <div className="col-span-12 lg:col-span-8 space-y-4">
           <div className="ui-card flex items-center justify-between">
-            <span className="ui-label">장면별 음성 세그먼트</span>
+            <span className="ui-label">생성된 음성 확인</span>
             <button
               onClick={handleSynthesizeAll}
               disabled={isSynthesizing || segments.length === 0}
@@ -4661,39 +4874,58 @@ const VoiceStep = () => {
               </div>
             ) : (
               segments.map((seg, idx) => (
-                <div key={seg.id} className="ui-card flex items-center gap-4">
+                <div key={seg.id} className="ui-card flex flex-col gap-3">
+                  <div className="flex items-center gap-4">
                   <span className="ui-step__num is-selected">{(idx + 1).toString().padStart(2, '0')}</span>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-foreground truncate">{seg.text}</p>
-                    <p className="text-xs text-slate-500">{seg.durationSec > 0 ? `${seg.durationSec.toFixed(1)}초` : '—'} · 씬 {seg.sceneIndex}</p>
+                    <p className="text-xs text-slate-500">
+                      {seg.durationSec > 0 ? `${formatTtsDuration(seg.durationSec)} (${seg.durationSec.toFixed(1)}초)` : '오디오 길이 확인 중...'} · 씬 {seg.sceneIndex}
+                    </p>
                   </div>
                   <span className="ui-pill">{seg.status === 'done' ? '완료' : '대기'}</span>
-                  <button
-                    className="ui-btn ui-btn--ghost"
-                    disabled={!seg.audioUrl}
-                    onClick={() => seg.audioUrl && playUrl(seg.audioUrl)}
-                  >
-                    <PlayCircle size={14} /> 재생
-                  </button>
+                  </div>
+                  {seg.audioUrl ? (
+                    <div className="pl-12">
+                      <audio
+                        controls
+                        preload="none"
+                        src={seg.audioUrl}
+                        className="w-full"
+                        onLoadedMetadata={(event) => {
+                          const audioEl = event.currentTarget;
+                          if (Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
+                            syncSegmentDuration(seg.id, audioEl.duration);
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div className="pl-12 text-xs text-slate-500">
+                      아직 생성된 음성이 없습니다.
+                    </div>
+                  )}
                 </div>
               ))
             )}
           </div>
-          {totalGeneratedTtsSec > 0 && (
+          {segments.length > 0 && (
             <div className="ui-card ui-card--muted space-y-2">
-              <span className="ui-label">생성된 TTS 총 길이</span>
+              <span className="ui-label">생성된 전체 음성 길이</span>
               <div className="text-lg font-semibold text-foreground">
-                {formatTtsDuration(totalGeneratedTtsSec)}
+                {totalGeneratedTtsSec > 0 ? formatTtsDuration(totalGeneratedTtsSec) : '계산 중...'}
               </div>
               <p className="text-xs text-slate-500">
-                총 {totalGeneratedTtsSec.toFixed(1)}초 분량의 음성이 준비되어 있습니다.
+                {totalGeneratedTtsSec > 0
+                  ? `총 ${totalGeneratedTtsSec.toFixed(1)}초 분량의 음성이 준비되어 있습니다.`
+                  : '생성된 음성 메타데이터를 읽는 중입니다.'}
               </p>
             </div>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-4">
         <button
           type="button"
           onClick={() => setCurrentStep(5)}
@@ -4701,6 +4933,20 @@ const VoiceStep = () => {
         >
           <ChevronRight size={16} className="rotate-180" /> 5 비주얼 돌아가기
         </button>
+        <DisabledButtonHint
+          disabled={!canSkipToVideoStep}
+          reason={skipToVideoDisabledReason}
+          className="w-full"
+        >
+          <button
+            type="button"
+            onClick={() => setCurrentStep(7)}
+            disabled={!canSkipToVideoStep}
+            className="ui-btn ui-btn--secondary w-full justify-center"
+          >
+            건너뛰기
+          </button>
+        </DisabledButtonHint>
         <DisabledButtonHint
           disabled={!canMoveToVideoStep}
           reason={moveToVideoDisabledReason}
@@ -4722,13 +4968,9 @@ const VoiceStep = () => {
 
 // --- [Step 7: AI 영상 생성] ---
 const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
-  const { sessionId, scenes, videoFormat, subtitlesEnabled, setSubtitlesEnabled, burnInSubtitles, setBurnInSubtitles, setVideoUrl, setCurrentStep } = useGlobal();
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [jobStatus, setJobStatus] = useState<'idle' | 'pending' | 'running' | 'success' | 'failure'>('idle');
-  const [jobError, setJobError] = useState<string | null>(null);
-  const [resultVideoUrl, setResultVideoUrl] = useState<string | null>(null);
-  const [resultSrtUrl, setResultSrtUrl] = useState<string | null>(null);
-  const [resultVttUrl, setResultVttUrl] = useState<string | null>(null);
+  const { sessionId, scenes, videoFormat, subtitlesEnabled, setSubtitlesEnabled, burnInSubtitles, setBurnInSubtitles, exportJob, setExportJob, setCurrentStep } = useGlobal();
+  const { taskId, status: jobStatus, error: jobError, resultVideoUrl, resultSrtUrl, resultVttUrl } = exportJob;
+  const prevJobStatusRef = useRef<typeof jobStatus>('idle');
 
   const timeline = useMemo(() => {
     return (scenes || []).map((s, idx) => ({
@@ -4749,6 +4991,14 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const readyScenes = useMemo(() => timeline.filter(t => t.hasImage && t.hasAudio), [timeline]);
   const isRenderLocked = jobStatus === 'running' || jobStatus === 'pending';
   const effectiveBurnInSubtitles = false;
+  const formatTimelineDuration = useCallback((sec: number) => {
+    const safe = Math.max(0, sec || 0);
+    const minutes = Math.floor(safe / 60);
+    const seconds = Math.round(safe % 60);
+    if (minutes <= 0) return `${seconds}초`;
+    if (seconds === 0) return `${minutes}분`;
+    return `${minutes}분 ${seconds}초`;
+  }, []);
 
   useEffect(() => {
     if (burnInSubtitles) setBurnInSubtitles(false);
@@ -4845,11 +5095,14 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
   const handleExport = async () => {
     if (!sessionId) return showToast('세션 ID가 없습니다. (Studio 프로젝트를 새로 생성 후 시도해주세요)');
     if (readyScenes.length === 0) return showToast('내보내려면 이미지+음성이 모두 있는 씬이 필요합니다. Step 5~6를 완료해주세요.');
-    setJobError(null);
-    setResultVideoUrl(null);
-    setResultSrtUrl(null);
-    setResultVttUrl(null);
-    setJobStatus('pending');
+    setExportJob({
+      taskId: null,
+      status: 'pending',
+      error: null,
+      resultVideoUrl: null,
+      resultSrtUrl: null,
+      resultVttUrl: null,
+    });
     try {
       const res = await studioExport({
         session_id: sessionId,
@@ -4864,12 +5117,24 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
           duration_sec: s.duration,
         })),
       });
-      setTaskId(res.task_id);
-      setJobStatus('running');
+      setExportJob({
+        taskId: res.task_id,
+        status: 'running',
+        error: null,
+        resultVideoUrl: null,
+        resultSrtUrl: null,
+        resultVttUrl: null,
+      });
       showToast('영상 렌더링을 시작했습니다.');
     } catch (e) {
-      setJobStatus('failure');
-      setJobError(e instanceof Error ? e.message : '내보내기 실패');
+      setExportJob({
+        taskId: null,
+        status: 'failure',
+        error: e instanceof Error ? e.message : '내보내기 실패',
+        resultVideoUrl: null,
+        resultSrtUrl: null,
+        resultVttUrl: null,
+      });
     }
   };
 
@@ -4881,39 +5146,17 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
     } catch {
       showToast('취소 요청에 실패했습니다.');
     } finally {
-      setTaskId(null);
-      setJobStatus('idle');
+      setExportJob(createDefaultExportJobState());
     }
   };
 
   useEffect(() => {
-    if (!taskId) return;
-    if (jobStatus !== 'pending' && jobStatus !== 'running') return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const s = await studioExportJobStatus(taskId);
-        if (cancelled) return;
-        setJobStatus(s.status);
-        if (s.status === 'success') {
-          const vurl = s.result?.video_url || null;
-          setResultVideoUrl(vurl);
-          setVideoUrl(vurl);
-          setResultSrtUrl((s.result?.captions as any)?.srt_url || null);
-          setResultVttUrl((s.result?.captions as any)?.vtt_url || null);
-          showToast('영상 렌더링이 완료되었습니다.');
-        }
-        if (s.status === 'failure') {
-          setJobError(s.error || '렌더링 실패');
-        }
-      } catch (e) {
-        if (!cancelled) setJobError(e instanceof Error ? e.message : '상태 조회 실패');
-      }
-    };
-    tick();
-    const id = window.setInterval(tick, 2000);
-    return () => { cancelled = true; window.clearInterval(id); };
-  }, [taskId, jobStatus]);
+    const prev = prevJobStatusRef.current;
+    if (jobStatus === 'success' && prev !== 'success' && resultVideoUrl) {
+      showToast('영상 렌더링이 완료되었습니다.');
+    }
+    prevJobStatusRef.current = jobStatus;
+  }, [jobStatus, resultVideoUrl, showToast]);
 
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
@@ -5020,16 +5263,54 @@ const VideoStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
         <div className="col-span-12 lg:col-span-8 space-y-4">
           <div className="ui-card">
-            <span className="ui-label">타임라인</span>
-            <div className="flex gap-2 mt-3 overflow-x-auto pb-2">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="space-y-2">
+                <span className="ui-label">영상 타임라인 미리보기</span>
+                <p className="text-sm text-slate-600">
+                  현재 준비된 씬 순서와 길이를 한눈에 확인합니다.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <div className="rounded-full border border-border/70 bg-card/45 px-3 py-1.5 text-xs text-slate-500">
+                  전체 길이 <span className="ml-1 font-semibold text-foreground">{formatTimelineDuration(totalDuration)}</span>
+                </div>
+                <div className="rounded-full border border-border/70 bg-card/45 px-3 py-1.5 text-xs text-slate-500">
+                  준비 완료 씬 <span className="ml-1 font-semibold text-foreground">{readyScenes.length}개</span>
+                </div>
+                <div className="rounded-full border border-border/70 bg-card/45 px-3 py-1.5 text-xs text-slate-500">
+                  전체 씬 <span className="ml-1 font-semibold text-foreground">{timeline.length}개</span>
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
               {timeline.map((clip) => (
                 <div
                   key={clip.id}
-                  className="flex-shrink-0 w-24 aspect-video rounded-xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center"
+                  className={`rounded-2xl border px-4 py-4 transition-colors ${
+                    clip.hasImage && clip.hasAudio
+                      ? 'border-primary/25 bg-primary/5'
+                      : 'border-border/70 bg-card/35'
+                  }`}
                 >
-                  <Film size={20} className="text-slate-400 mb-1" />
-                  <span className="text-xs font-medium text-slate-700">{clip.label}</span>
-                  <span className="text-[10px] text-slate-500">{clip.duration.toFixed(1)}s</span>
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${
+                      clip.hasImage && clip.hasAudio
+                        ? 'border border-emerald-400/20 bg-emerald-400/10 text-emerald-200'
+                        : 'border border-white/10 bg-white/5 text-slate-500'
+                    }`}>
+                      {clip.hasImage && clip.hasAudio ? '준비 완료' : '준비 중'}
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-sm font-semibold text-foreground">{clip.label}</div>
+                    <div className="text-xs text-slate-500">{formatTimelineDuration(clip.duration)}</div>
+                  </div>
+                  <div className="mt-3 flex items-center gap-2 text-[11px] text-slate-500">
+                    <span className={`inline-flex h-2.5 w-2.5 rounded-full ${clip.hasImage ? 'bg-emerald-300' : 'bg-slate-500/50'}`} />
+                    이미지
+                    <span className={`ml-2 inline-flex h-2.5 w-2.5 rounded-full ${clip.hasAudio ? 'bg-sky-300' : 'bg-slate-500/50'}`} />
+                    음성
+                  </div>
                 </div>
               ))}
             </div>
@@ -5236,13 +5517,14 @@ const MetaStep = ({ showToast }: { showToast: (msg: string) => void }) => {
 
 // --- [Step 9: 썸네일 연구소] ---
 const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
-  const { thumbnailData, setThumbnailData, setCurrentStep, videoFormat, selectedTopic, finalTopic } = useGlobal();
+  const { thumbnailData, setThumbnailData, setCurrentStep, videoFormat, selectedTopic, finalTopic, thumbnailBenchmarkJob, setThumbnailBenchmarkJob } = useGlobal();
   const thumbnails = (thumbnailData.thumbnails?.length ?? 0) > 0 ? (thumbnailData.thumbnails as ThumbnailCandidate[]) : MOCK_THUMBNAILS;
   const ytUrlInput = thumbnailData.ytUrlInput || '';
   const ytThumbnailUrl = thumbnailData.ytThumbnailUrl;
   const [ytThumbnailError, setYtThumbnailError] = useState(false);
-  const [isBenchmarking, setIsBenchmarking] = useState(false);
-  const [benchmarkSummary, setBenchmarkSummary] = useState<string | null>(null);
+  const isBenchmarking = thumbnailBenchmarkJob.status === 'pending' || thumbnailBenchmarkJob.status === 'running';
+  const benchmarkSummary = thumbnailBenchmarkJob.resultAnalysisSummary;
+  const previousBenchmarkStatusRef = useRef(thumbnailBenchmarkJob.status);
   const thumbnailAspectClass = videoFormat === '9:16' ? 'aspect-[9/16]' : 'aspect-video';
   const videoFormatLabel = videoFormat === '9:16' ? '세로형(9:16)' : '가로형(16:9)';
   const topicForThumbnail = (finalTopic || selectedTopic || '').trim();
@@ -5268,31 +5550,36 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
       showToast('먼저 주제를 확정한 뒤 벤치마킹 썸네일을 생성해주세요.');
       return;
     }
-    setIsBenchmarking(true);
-    setBenchmarkSummary(null);
+    setThumbnailBenchmarkJob({
+      taskId: null,
+      status: 'pending',
+      error: null,
+      resultImageUrl: null,
+      resultAnalysisSummary: null,
+    });
     try {
-      const { imageUrl, analysisSummary } = await generateBenchmarkThumbnail(
-        ytThumbnailUrl,
-        topicForThumbnail,
-        videoFormat === '9:16' ? '9:16' : '16:9'
-      );
-      setBenchmarkSummary(analysisSummary);
-      const newThumb: ThumbnailCandidate = {
-        id: `bench-${Date.now()}`,
-        title: '벤치마킹 썸네일',
-        imageUrl,
-        ctrHint: '레퍼런스 분석 기반 생성',
-        isSelected: false,
-      };
-      setThumbnailData(prev => {
-        const base = (prev.thumbnails?.length ?? 0) > 0 ? prev.thumbnails : MOCK_THUMBNAILS;
-        return { ...prev, thumbnails: [...base, newThumb] };
+      const started = await studioThumbnailBenchmark({
+        reference_thumbnail_url: ytThumbnailUrl,
+        target_topic: topicForThumbnail,
+        aspect_ratio: videoFormat === '9:16' ? '9:16' : '16:9',
       });
-      showToast('벤치마킹 썸네일이 생성되었습니다.');
+      setThumbnailBenchmarkJob({
+        taskId: started.task_id,
+        status: 'pending',
+        error: null,
+        resultImageUrl: null,
+        resultAnalysisSummary: null,
+      });
+      showToast('벤치마킹 작업을 시작했습니다. 다른 스텝으로 이동해도 계속 진행됩니다.');
     } catch (e) {
+      setThumbnailBenchmarkJob({
+        taskId: null,
+        status: 'failure',
+        error: e instanceof Error ? e.message : '벤치마킹 생성 실패',
+        resultImageUrl: null,
+        resultAnalysisSummary: null,
+      });
       showToast('벤치마킹 생성에 실패했습니다.');
-    } finally {
-      setIsBenchmarking(false);
     }
   };
 
@@ -5328,6 +5615,18 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
     }
     await downloadImage(selected.imageUrl, 'thumbnail.jpg');
   };
+
+  useEffect(() => {
+    const previous = previousBenchmarkStatusRef.current;
+    if (previous !== thumbnailBenchmarkJob.status) {
+      if (thumbnailBenchmarkJob.status === 'success') {
+        showToast('벤치마킹 썸네일이 생성되었습니다.');
+      } else if (thumbnailBenchmarkJob.status === 'failure' && thumbnailBenchmarkJob.error) {
+        showToast(thumbnailBenchmarkJob.error);
+      }
+    }
+    previousBenchmarkStatusRef.current = thumbnailBenchmarkJob.status;
+  }, [thumbnailBenchmarkJob.status, thumbnailBenchmarkJob.error, showToast]);
 
   return (
     <div className="space-y-10 pb-24 max-w-[1200px] mx-auto">
@@ -5380,6 +5679,16 @@ const ThumbnailStep = ({ showToast }: { showToast: (msg: string) => void }) => {
                 <><BarChart3 size={14} /> 썸네일 벤치마킹하기</>
               )}
             </button>
+            {isBenchmarking && (
+              <div className="ui-card--muted text-sm text-slate-700 p-3 rounded-xl">
+                썸네일 벤치마킹 작업이 백그라운드에서 진행 중입니다. 다른 스텝으로 이동해도 계속 생성됩니다.
+              </div>
+            )}
+            {thumbnailBenchmarkJob.status === 'failure' && thumbnailBenchmarkJob.error && (
+              <div className="ui-card--muted text-sm text-destructive p-3 rounded-xl">
+                {thumbnailBenchmarkJob.error}
+              </div>
+            )}
             {benchmarkSummary && (
               <div className="ui-card--muted text-sm text-slate-700 p-3 rounded-xl">
                 {benchmarkSummary}

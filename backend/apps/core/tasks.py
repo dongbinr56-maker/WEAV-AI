@@ -343,3 +343,98 @@ def task_studio_export(
         raise
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@shared_task(bind=True, max_retries=1)
+def task_studio_thumbnail_benchmark(
+    self,
+    job_id: int,
+    *,
+    reference_thumbnail_url: str,
+    target_topic: str,
+    aspect_ratio: str = "16:9",
+) -> dict[str, Any]:
+    job = Job.objects.get(pk=job_id)
+    job.status = "running"
+    job.save(update_fields=["status", "updated_at"])
+
+    try:
+        from apps.ai.fal_client import image_generation_fal
+        from .views import _gemini_generate_text
+
+        normalized_topic = (target_topic or "").strip()
+        analysis_summary = "레퍼런스 썸네일의 구도·색감·타이포 톤을 분석해 동일한 분위기의 벤치마킹 이미지를 생성했습니다."
+
+        try:
+            analysis_summary = _gemini_generate_text(
+                prompt="\n".join(
+                    [
+                        f"Analyze this thumbnail URL style: {reference_thumbnail_url}.",
+                        f"The new thumbnail topic is: {normalized_topic}." if normalized_topic else "",
+                        "One sentence summary in Korean focused on composition, color, packaging, and click trigger.",
+                    ]
+                ),
+                system_prompt=" ".join(
+                    [
+                        "Persona:",
+                        "You are a senior YouTube thumbnail analyst and creative director.",
+                        "Domain: thumbnail composition, color, typography, and high-CTR visual patterns.",
+                        "Analyze a thumbnail and write one short sentence summarizing its style (composition, color, typography).",
+                        "Reply with plain text only in Korean.",
+                    ]
+                ),
+                model="google/gemini-2.5-flash",
+                google_search=False,
+            ) or analysis_summary
+        except Exception:
+            pass
+
+        image_prompt = " ".join(
+            [
+                "Create a NEW YouTube thumbnail by benchmarking the provided reference thumbnail image.",
+                f"The new thumbnail must be about this topic: {normalized_topic}." if normalized_topic else "Create a strong, clickable benchmarked thumbnail.",
+                f"Thumbnail benchmark summary: {analysis_summary}.",
+                "Use the reference thumbnail only as a packaging benchmark for composition, crop, color energy, focal hierarchy, emotional intensity, and click-through structure.",
+                "Preserve the benchmark mood and packaging energy, but rebuild the subject matter for the new topic.",
+                "Do NOT copy the original thumbnail literally.",
+                "Do NOT keep the original subject, original face, original text, original logo, or original branding unless it naturally matches the requested topic.",
+                "Keep one dominant focal subject or symbol, a simplified composition, and aggressive thumbnail readability.",
+                f"Final output must be composed for a {aspect_ratio} thumbnail canvas.",
+                "Create only one final thumbnail image. No collage, no split layout, no storyboard, no grid, no multiple panels.",
+                "Avoid text, watermark, logo, interface chrome, and guide marks unless the topic absolutely requires title typography.",
+            ]
+        )
+        images = image_generation_fal(
+            image_prompt,
+            model="fal-ai/nano-banana-2/edit",
+            aspect_ratio=aspect_ratio if aspect_ratio in ("9:16", "16:9") else "16:9",
+            num_images=1,
+            reference_image_url=reference_thumbnail_url,
+            image_urls=[reference_thumbnail_url],
+            resolution="4K",
+            output_format="png",
+            limit_generations=True,
+        )
+        image_url = (images or [{}])[0].get("url")
+        if not image_url:
+            raise RuntimeError("benchmark thumbnail image missing")
+
+        job.status = "success"
+        job.error_message = ""
+        job.result = {
+            "image_url": image_url,
+            "analysis_summary": analysis_summary,
+            "meta": {
+                "aspect_ratio": aspect_ratio,
+                "target_topic": normalized_topic,
+                "reference_thumbnail_url": reference_thumbnail_url,
+            },
+        }
+        job.save(update_fields=["status", "error_message", "result", "updated_at"])
+        return job.result
+    except Exception as e:
+        job.status = "failure"
+        job.error_message = str(e)
+        job.result = {}
+        job.save(update_fields=["status", "error_message", "result", "updated_at"])
+        raise

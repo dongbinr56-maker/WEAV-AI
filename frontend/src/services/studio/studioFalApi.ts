@@ -8,6 +8,8 @@ const STUDIO_YOUTUBE_BENCHMARK_ANALYZE = '/api/v1/studio/youtube-benchmark-analy
 const STUDIO_RESEARCH = '/api/v1/studio/research/';
 const STUDIO_EXPORT = '/api/v1/studio/export/';
 const STUDIO_EXPORT_JOB = '/api/v1/studio/export/job/';
+const STUDIO_THUMBNAIL_BENCHMARK = '/api/v1/studio/thumbnail-benchmark/';
+const STUDIO_THUMBNAIL_BENCHMARK_JOB = '/api/v1/studio/thumbnail-benchmark/job/';
 const STUDIO_UPLOAD_REFERENCE_IMAGE = '/api/v1/chat/image/upload-reference/';
 const STUDIO_VIDEO = '/api/v1/studio/video/';
 const STUDIO_BG_REMOVE = '/api/v1/studio/bg-remove/';
@@ -227,12 +229,46 @@ export type StudioExportJobStatus = {
   error?: string;
 };
 
+export type StudioThumbnailBenchmarkResponse = {
+  task_id: string;
+  job_id: number;
+};
+
+export type StudioThumbnailBenchmarkJobStatus = {
+  task_id: string;
+  job_id: number;
+  kind: string;
+  status: 'pending' | 'running' | 'success' | 'failure';
+  result: {
+    image_url?: string;
+    analysis_summary?: string;
+    meta?: {
+      aspect_ratio?: string;
+      target_topic?: string;
+      reference_thumbnail_url?: string;
+    };
+  };
+  error?: string;
+};
+
 export async function studioExportJobStatus(taskId: string): Promise<StudioExportJobStatus> {
   return api.get<StudioExportJobStatus>(`${STUDIO_EXPORT_JOB}${encodeURIComponent(taskId)}/`);
 }
 
 export async function studioExportJobCancel(taskId: string): Promise<{ status: string }> {
   return api.post<{ status: string }>(`${STUDIO_EXPORT_JOB}${encodeURIComponent(taskId)}/cancel/`, {});
+}
+
+export async function studioThumbnailBenchmark(options: {
+  reference_thumbnail_url: string;
+  target_topic: string;
+  aspect_ratio: '9:16' | '16:9';
+}): Promise<StudioThumbnailBenchmarkResponse> {
+  return api.post<StudioThumbnailBenchmarkResponse>(STUDIO_THUMBNAIL_BENCHMARK, options);
+}
+
+export async function studioThumbnailBenchmarkJobStatus(taskId: string): Promise<StudioThumbnailBenchmarkJobStatus> {
+  return api.get<StudioThumbnailBenchmarkJobStatus>(`${STUDIO_THUMBNAIL_BENCHMARK_JOB}${encodeURIComponent(taskId)}/`);
 }
 
 export interface StudioVideoClip {

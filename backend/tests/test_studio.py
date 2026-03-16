@@ -8,6 +8,7 @@ from django.test import TestCase, Client
 from apps.core.views import (
     STUDIO_LLM_PROMPT_MAX,
     STUDIO_IMAGE_PROMPT_MAX,
+    STUDIO_VIDEO_PROMPT_MAX,
     STUDIO_TTS_TEXT_MAX,
 )
 
@@ -205,6 +206,56 @@ class StudioImageTests(TestCase):
         self.assertEqual(kwargs['reference_image_url'], 'https://example.com/a.png')
         self.assertEqual(kwargs['resolution'], '4K')
         self.assertEqual(kwargs['output_format'], 'png')
+
+
+class StudioVideoPromptTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+    def test_studio_video_prompt_missing_input_concept_400(self):
+        resp = self.client.post(
+            '/api/v1/studio/video-prompt/',
+            data={},
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+
+    def test_studio_video_prompt_too_long_400(self):
+        resp = self.client.post(
+            '/api/v1/studio/video-prompt/',
+            data={'input_concept': 'x' * (STUDIO_VIDEO_PROMPT_MAX + 1)},
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('input_concept', resp.json().get('error', '').lower())
+
+    @patch('apps.ai.fal_client.generate_video_prompt_fal')
+    def test_studio_video_prompt_ok(self, mock_generate):
+        mock_generate.return_value = {
+            'prompt': 'A cinematic handheld tracking shot of a cyclist weaving through neon rain at night.',
+            'model': 'google/gemini-2.0-flash-001',
+        }
+        resp = self.client.post(
+            '/api/v1/studio/video-prompt/',
+            data={
+                'input_concept': '비 오는 밤 네온 도시를 질주하는 자전거 라이더',
+                'style': 'neon-noir cinematic realism',
+                'camera_style': 'handheld tracking shot',
+                'camera_direction': 'push in',
+                'pacing': 'fast',
+                'special_effects': 'rain streaks, wet reflections',
+                'custom_elements': 'focus on speed and danger',
+                'prompt_length': 'long',
+            },
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('prompt', resp.json())
+        mock_generate.assert_called_once()
+        _, kwargs = mock_generate.call_args
+        self.assertEqual(kwargs['style'], 'neon-noir cinematic realism')
+        self.assertEqual(kwargs['camera_style'], 'handheld tracking shot')
+        self.assertEqual(kwargs['prompt_length'], 'long')
 
 
 class StudioTTSTests(TestCase):

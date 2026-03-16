@@ -108,6 +108,23 @@ export interface StudioVisualReferenceAsset {
 
 export type StudioTopicGenerationBasis = 'idea-only' | 'benchmark-only' | 'idea-plus-benchmark';
 
+export interface StudioExportJobState {
+  taskId: string | null;
+  status: 'idle' | 'pending' | 'running' | 'success' | 'failure';
+  error: string | null;
+  resultVideoUrl: string | null;
+  resultSrtUrl: string | null;
+  resultVttUrl: string | null;
+}
+
+export interface StudioThumbnailBenchmarkJobState {
+  taskId: string | null;
+  status: 'idle' | 'pending' | 'running' | 'success' | 'failure';
+  error: string | null;
+  resultImageUrl: string | null;
+  resultAnalysisSummary: string | null;
+}
+
 export interface StudioGlobalContextType {
   sessionId?: number;
   resetStudioProject: () => void;
@@ -210,6 +227,10 @@ export interface StudioGlobalContextType {
   /** Step 7에서 생성된 영상 URL. 새로고침 후에도 유지. */
   videoUrl: string | null;
   setVideoUrl: React.Dispatch<React.SetStateAction<string | null>>;
+  exportJob: StudioExportJobState;
+  setExportJob: React.Dispatch<React.SetStateAction<StudioExportJobState>>;
+  thumbnailBenchmarkJob: StudioThumbnailBenchmarkJobState;
+  setThumbnailBenchmarkJob: React.Dispatch<React.SetStateAction<StudioThumbnailBenchmarkJobState>>;
 
   // Step 9 썸네일
   thumbnailData: {

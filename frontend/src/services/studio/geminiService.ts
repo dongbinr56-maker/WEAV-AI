@@ -652,7 +652,7 @@ export const generatePlanningStep = async (stepName: string, context: any) => {
     `Original user topic: ${context.topic}`,
     `Verified working topic: ${verifiedTopic}`,
     `Style (user-selected): ${context.style || 'N/A'}`,
-    `Target length: ${context.length || 'short'}`,
+    buildTargetDurationPrompt(context.targetDuration, context.length),
     researchBrief ? `Verified research brief:\n${researchBrief}` : '',
     masterPlanText ? `Master plan context (Korean, may be truncated):\n${truncateText(masterPlanText, 4000)}\nUse it to keep this step consistent with the overall plan.` : '',
     benchmarkSummary || benchmarkPatterns.length
@@ -714,6 +714,7 @@ export const rewritePlanningStep = async (stepName: string, context: any) => {
     `Original user topic: ${context.topic}`,
     `Verified working topic: ${verifiedTopic}`,
     `Style (user-selected): ${context.style || 'N/A'}`,
+    buildTargetDurationPrompt(context.targetDuration, context.length),
     mode ? `Rewrite mode: ${mode}` : '',
     userInstruction ? `User request: ${userInstruction}` : '',
     researchBrief ? `Verified research brief:\n${researchBrief}` : '',
@@ -742,6 +743,7 @@ export const generateMasterPlan = async (context: {
   style: string;
   styleRules?: string;
   length?: string;
+  targetDuration?: string;
   benchmarkSummary?: string;
   benchmarkPatterns?: string[];
   existingMasterPlan?: string;
@@ -778,7 +780,7 @@ export const generateMasterPlan = async (context: {
     `Original user topic: ${context.topic}`,
     `Verified working topic: ${verifiedTopic}`,
     `Style (user-selected): ${context.style || 'N/A'}`,
-    `Target length: ${context.length || 'short'}`,
+    buildTargetDurationPrompt(context.targetDuration, context.length),
     researchBrief ? `Verified research brief:\n${researchBrief}` : '',
     benchmarkSummary || benchmarkPatterns.length
       ? `Benchmarking context:\n- Summary: ${benchmarkSummary || '(none)'}\n- Patterns: ${benchmarkPatterns.length ? benchmarkPatterns.join(' | ') : '(none)'}\nReflect the summary/patterns where relevant, without copying verbatim.`
@@ -942,6 +944,113 @@ function targetDurationToCharHint(sec: number): string {
   return `권장: 전체 대본은 약 ${chars}자 내외 (한국어 TTS 기준 약 ${sec}초).`;
 }
 
+function estimateNarrationSeconds(text: string): number {
+  const plain = (text || '')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\*\*[^*]+\*\*/g, ' ')
+    .replace(/(?:화면|음악)\s*:\s*[^\n]*/g, ' ')
+    .replace(/\([^)]*(?:화면|음악)[^)]*\)/g, ' ')
+    .replace(/\s+/g, '');
+  if (!plain) return 0;
+  return Math.max(1, Math.round((plain.length / 280) * 60));
+}
+
+function getTargetDurationBounds(targetDuration?: string) {
+  const targetSec = targetDurationToSeconds(targetDuration);
+  if (targetSec <= 0) return { targetSec: 0, minSec: 0, maxSec: 0, guide: '' };
+  const tolerance = Math.max(20, Math.round(targetSec * 0.12));
+  const minSec = Math.max(15, targetSec - tolerance);
+  const maxSec = targetSec + tolerance;
+  return {
+    targetSec,
+    minSec,
+    maxSec,
+    guide: `Exact target duration: ${targetDuration} (~${targetSec}s). Estimated narration length must land between ${minSec}s and ${maxSec}s. If unsure, favor slightly longer rather than shorter.`,
+  };
+}
+
+function buildTargetDurationPrompt(targetDuration?: string, length?: string) {
+  const bounds = getTargetDurationBounds(targetDuration);
+  if (!bounds.targetSec) return length ? `Target length profile: ${length}` : '';
+  return [
+    length ? `Target length profile: ${length}` : '',
+    bounds.guide,
+    targetDurationToCharHint(bounds.targetSec),
+  ].filter(Boolean).join(' ');
+}
+
+async function refineMasterScriptToTargetDuration(options: {
+  script: string;
+  topic: string;
+  verifiedTopic: string;
+  style: string;
+  styleRules?: string;
+  planning: any;
+  researchBrief: string;
+  benchmarkSummary: string;
+  benchmarkPatterns: string[];
+  targetDuration?: string;
+}) {
+  const bounds = getTargetDurationBounds(options.targetDuration);
+  if (!bounds.targetSec) return options.script;
+
+  let currentScript = (options.script || '').trim();
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const estimatedSec = estimateNarrationSeconds(currentScript);
+    if (estimatedSec >= bounds.minSec && estimatedSec <= bounds.maxSec) return currentScript;
+
+    const direction = estimatedSec < bounds.minSec ? 'expand' : 'compress';
+    const sys = [
+      buildStep3EditorialPersona(options.style || 'N/A'),
+      LEAD_SCRIPTWRITER_INSTRUCTION.trim(),
+      buildStep3ResearchRules(),
+      'Task:',
+      direction === 'expand'
+        ? 'Expand the Korean master script so the narration reaches the requested duration range while preserving the same story spine and factual baseline.'
+        : 'Compress the Korean master script so the narration reaches the requested duration range while preserving the same story spine and factual baseline.',
+      'Reply with JSON only: { "master_script": string }.',
+      options.styleRules ? `Style rules:\n${options.styleRules}` : '',
+      options.researchBrief ? 'Use the verified research brief as the factual source of truth.' : '',
+    ].filter(Boolean).join('\n');
+
+    const prompt = [
+      `Original user topic: ${options.topic}.`,
+      `Verified working topic: ${options.verifiedTopic}.`,
+      `Style (user-selected): ${options.style}.`,
+      bounds.guide,
+      `Current estimated narration length: ~${estimatedSec}s.`,
+      direction === 'expand'
+        ? 'The current draft is too short. Add detail, connective explanation, examples, evidence framing, and scene-setting narration.'
+        : 'The current draft is too long. Remove repetition, compress transitions, and keep only the strongest lines.',
+      options.researchBrief ? `Verified research brief:\n${options.researchBrief}` : '',
+      options.benchmarkSummary || options.benchmarkPatterns.length
+        ? `Benchmarking summary: ${options.benchmarkSummary || '(none)'}. Benchmarking patterns: ${options.benchmarkPatterns.length ? options.benchmarkPatterns.join(' | ') : '(none)'}.`
+        : '',
+      `Planning (JSON): ${JSON.stringify(options.planning)}.`,
+      'Current master script (Korean):',
+      currentScript,
+      '',
+      'Return JSON only.',
+    ].filter(Boolean).join('\n');
+
+    try {
+      const { output } = await callStep3Gemini({
+        prompt,
+        systemPrompt: sys,
+        googleSearch: true,
+        responseSchema: STEP3_SCRIPT_SCHEMA as unknown as Record<string, unknown>,
+      });
+      const parsed = safeJsonParse<{ master_script?: string }>(output, {});
+      const revised = typeof parsed.master_script === 'string' ? parsed.master_script.trim() : '';
+      if (!revised) break;
+      currentScript = revised;
+    } catch {
+      break;
+    }
+  }
+  return currentScript;
+}
+
 export const synthesizeMasterScript = async (context: {
   topic: string;
   planningData: any;
@@ -970,9 +1079,9 @@ export const synthesizeMasterScript = async (context: {
     context.styleRules ? `Style rules:\n${context.styleRules}` : '',
   ].join('\n');
   const planning = context.planningData || {};
-  const targetSec = targetDurationToSeconds(planning.targetDuration);
-  const durationGuide = targetSec > 0
-    ? `Target duration: ${planning.targetDuration} (~${targetSec}s). ${targetDurationToCharHint(targetSec)}`
+  const durationBounds = getTargetDurationBounds(planning.targetDuration);
+  const durationGuide = durationBounds.targetSec > 0
+    ? `${durationBounds.guide} ${targetDurationToCharHint(durationBounds.targetSec)}`
     : '';
 
   const benchmarkSummary = typeof context.benchmarkSummary === 'string' ? context.benchmarkSummary.trim() : '';
@@ -1000,7 +1109,20 @@ export const synthesizeMasterScript = async (context: {
     });
     const parsed = safeJsonParse<{ master_script?: string }>(output, {});
     const fallback = `제목: ${context.topic}\n\n오프닝: 오늘은 ${context.topic}의 핵심을 60초 안에 정리합니다.\n본문: 핵심 포인트 1, 2, 3을 짧고 명확하게 전달합니다.\n클라이맥스: 가장 중요한 인사이트를 한 문장으로 강조합니다.\n아웃트로: 다음 영상 예고와 구독 CTA로 마무리합니다.`;
-    return { master_script: typeof parsed.master_script === 'string' ? parsed.master_script : fallback };
+    const initialScript = typeof parsed.master_script === 'string' ? parsed.master_script : fallback;
+    const masterScript = await refineMasterScriptToTargetDuration({
+      script: initialScript,
+      topic: context.topic,
+      verifiedTopic,
+      style: context.style,
+      styleRules: context.styleRules,
+      planning,
+      researchBrief,
+      benchmarkSummary,
+      benchmarkPatterns,
+      targetDuration: planning.targetDuration,
+    });
+    return { master_script: masterScript };
   } catch (e) {
     return { master_script: `제목: ${context.topic}\n\n오프닝: 오늘은 ${context.topic}의 핵심을 60초 안에 정리합니다.\n본문: 핵심 포인트 1, 2, 3을 짧고 명확하게 전달합니다.\n클라이맥스: 가장 중요한 인사이트를 한 문장으로 강조합니다.\n아웃트로: 다음 영상 예고와 구독 CTA로 마무리합니다.` };
   }
@@ -1056,10 +1178,11 @@ Script:\n${fullScript}\nReturn JSON array only.`;
     const { output } = await studioLlm({ prompt, system_prompt: sys, model: 'google/gemini-2.5-flash' });
     const parsed = safeJsonParse<Array<{ script_segment?: string; scene_description?: string }>>(output, []);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.map(p => ({
+      const cleaned = parsed.map(p => ({
         script_segment: sanitizeScriptSegment(p.script_segment ?? ''),
         scene_description: p.scene_description ?? 'Cinematic scene.',
-      }));
+      })).filter((item) => item.script_segment.trim().length > 0);
+      if (cleaned.length > 0) return cleaned;
     }
   } catch (e) {
     /* fallback */
