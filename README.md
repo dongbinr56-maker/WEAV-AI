@@ -245,15 +245,17 @@ docker compose exec -T postgres psql -U weavai -d postgres -c "ALTER DATABASE we
    - 모델 선택(Gemini 2.5 Flash, GPT-4.1, Claude Sonnet/Opus 4.6, Llama 4 Maverick 등) 후 메시지 입력·전송  
    - 응답은 비동기 처리, 완료 시 자동 갱신  
    - 같은 채팅방에서 **텍스트↔이미지 모드 토글**로 이미지 생성까지 공존
+   - 우측 패널의 **텍스트 프롬프트 조립기**로 short/precise/creative 프롬프트 초안을 생성 가능
    - (문서 RAG) 채팅방에서 PDF/HWP/HWPX 업로드 후 `@문서명`으로 질문하면, 답변 근거를 PDF 하이라이트로 확인 가능
 
 3. **이미지 생성**  
    - 모델 선택(Imagen 4, FLUX Pro v1.1 Ultra, Nano Banana 등) 후 프롬프트 입력·생성  
+   - **이미지 프롬프트 생성기**로 subject/style/composition/environment 기반 영문 프롬프트를 생성하고 입력창에 바로 적용 가능  
    - 참조 이미지·첨부 이미지로 편집 가능  
    - 생성된 이미지는 세션별 목록에 표시
 
 4. **WEAV Studio**  
-   - 기획·주제 선정·대본 설계·이미지/대본 생성·AI 음성·영상·메타데이터 AI 생성·썸네일 연구소(유튜브 URL 벤치마킹)까지 한 플로우로 진행
+   - 기획·트렌드/유튜브 벤치마킹·대본/씬 프롬프트 생성·AI 음성·영상 export·메타데이터 AI 생성·썸네일 연구소까지 한 플로우로 진행
 
 ---
 
@@ -268,8 +270,22 @@ docker compose exec -T postgres psql -U weavai -d postgres -c "ALTER DATABASE we
 | POST | `/api/v1/sessions/:id/upload/` | 문서 업로드(PDF/HWP/HWPX) 후 RAG 색인 (비동기) |
 | GET | `/api/v1/sessions/:id/documents/` | 업로드 문서 목록/상태 |
 | POST | `/api/v1/chat/complete/` | 채팅 전송 (비동기) |
+| POST | `/api/v1/chat/regenerate/` | 마지막 채팅 응답 재생성 |
 | POST | `/api/v1/chat/image/` | 이미지 생성 (비동기, 참조/첨부 이미지 지원) |
+| POST | `/api/v1/chat/image/regenerate/` | 마지막 이미지 생성 재실행 |
 | GET | `/api/v1/chat/job/:task_id/` | 비동기 작업 상태·결과 조회 |
+| POST | `/api/v1/chat/job/:task_id/cancel/` | 실행 중 작업 취소 |
+| GET | `/api/v1/studio/trending/` | YouTube 트렌드/카테고리 조회 |
+| GET | `/api/v1/studio/youtube-context/` | YouTube URL 메타데이터/설명/자막 컨텍스트 조회 |
+| POST | `/api/v1/studio/youtube-benchmark-analyze/` | YouTube URL 벤치마킹 분석 |
+| POST | `/api/v1/studio/llm/` | Studio 기획/대본/메타 생성용 LLM |
+| POST | `/api/v1/studio/image/` | Studio 씬 이미지 생성 |
+| POST | `/api/v1/studio/tts/` | Studio 음성 생성 |
+| POST | `/api/v1/studio/export/` | Studio 영상 export 작업 시작 |
+| GET | `/api/v1/studio/export/job/:task_id/` | Studio export 상태 조회 |
+| POST | `/api/v1/studio/export/job/:task_id/cancel/` | Studio export 작업 취소 |
+| POST | `/api/v1/studio/thumbnail-benchmark/` | 썸네일 벤치마킹 생성 |
+| GET | `/api/v1/studio/thumbnail-benchmark/job/:task_id/` | 썸네일 벤치마킹 상태 조회 |
 
 ---
 
@@ -284,7 +300,9 @@ docker compose exec -T postgres psql -U weavai -d postgres -c "ALTER DATABASE we
 | **backend/storage/** | S3/MinIO 업로드 (첨부·참조 이미지) |
 | **backend/tests/** | 프로젝트 테스트 (Docker에서만 실행) |
 | **frontend/** | React 19 + Vite 6 + TypeScript, Tailwind |
+| **frontend/src/components/chat/** | 채팅 UI + 문서 패널 + 텍스트/이미지 프롬프트 생성기 |
 | **frontend/src/components/studio/** | WEAV Studio UI (기획·대본·음성·영상·메타·썸네일) |
+| **frontend/public/data/** | 이미지 프롬프트 생성용 LocalBanana 프롬프트 코퍼스 |
 | **infra/** | Docker Compose (postgres, redis, minio, api, worker, nginx) |
 | **Makefile** | Docker 명령 래퍼 (Mac/Linux) |
 | **compose.ps1 / compose.cmd** | Docker 명령 래퍼 (Windows) |
